@@ -1,0 +1,44 @@
+:root {
+  color-scheme: light;
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: linear-gradient(135deg, #eef3ff, #f7fbff);
+  color: #1f2937;
+}
+
+.container {
+  max-width: 720px;
+  margin: 48px auto;
+  padding: 0 16px;
+}
+
+h1 {
+  margin-bottom: 8px;
+}
+
+.card {
+  background: #ffffff;
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: 0 6px 24px rgba(15, 23, 42, 0.08);
+}
+
+.error {
+  color: #b91c1c;
+  font-weight: 600;
+}
+
+code {
+  background: #f3f4f6;
+  padding: 2px 6px;
+  border-radius: 6px;
+}

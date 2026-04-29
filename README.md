@@ -41,7 +41,22 @@ infra/       Docker Compose and infrastructure wiring
 
 The implementation details, API contracts, data model, milestone criteria, and delivery checklist are defined in `IMPLEMENTATION_BLUEPRINT.md`.
 
-## Status
+## Local Development with Docker
 
-Repository initialized with blueprint and baseline project metadata.
+Start all services:
 
+```bash
+docker compose up --build
+```
+
+Or use the infra-scoped Compose file:
+
+```bash
+docker compose -f infra/docker-compose.yml up --build
+```
+
+Services:
+
+- Frontend: http://localhost:5173
+- Backend API: http://localhost:8000
+- Backend health: http://localhost:8000/api/health
