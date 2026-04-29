@@ -2,7 +2,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health_routes import router as health_router
+from app.api.log_routes import router as log_router
+from app.api.metrics_routes import router as metrics_router
 from app.api.policy_routes import router as policy_router
+from app.api.run_routes import router as run_router
 from app.api.simulate_routes import router as simulate_router
 from app.core.config import settings
 
@@ -26,7 +29,10 @@ def create_app() -> FastAPI:
     )
 
     app.include_router(health_router, prefix="/api")
+    app.include_router(log_router, prefix="/api")
+    app.include_router(metrics_router, prefix="/api")
     app.include_router(policy_router, prefix="/api")
+    app.include_router(run_router, prefix="/api")
     app.include_router(simulate_router, prefix="/api")
 
     @app.get("/")

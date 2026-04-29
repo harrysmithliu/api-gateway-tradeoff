@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from uuid import UUID
 
 from fastapi import HTTPException, status
+from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,8 +19,9 @@ from app.schemas.policy import (
 
 
 class PolicyService:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, redis_client: Redis):
         self.session = session
+        self.redis_client = redis_client
 
     async def list_policies(self) -> list[RateLimitPolicy]:
         result = await self.session.execute(
@@ -129,8 +131,8 @@ class PolicyService:
             active.policy_id = policy.id
             active.updated_at = datetime.now(timezone.utc)
 
-        # Runtime state reset will be handled when limiter state service is implemented.
-        _ = reset_runtime_state
+        if reset_runtime_state:
+            await self._clear_runtime_state_for_policy(policy_id=policy.id)
 
         await self.session.commit()
         return policy
@@ -161,3 +163,21 @@ class PolicyService:
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Invalid params_json for algorithm '{algorithm}': {exc}",
             ) from exc
+
+    async def _clear_runtime_state_for_policy(self, policy_id: UUID) -> None:
+        patterns = [
+            f"rl:fixed_window:{policy_id}:*",
+            f"rl:sliding_log:{policy_id}:*",
+            f"rl:swc:{policy_id}:*",
+            f"rl:token:{policy_id}:*",
+            f"rl:leaky:{policy_id}:*",
+        ]
+
+        for pattern in patterns:
+            cursor = 0
+            while True:
+                cursor, keys = await self.redis_client.scan(cursor=cursor, match=pattern, count=500)
+                if keys:
+                    await self.redis_client.delete(*keys)
+                if cursor == 0:
+                    break

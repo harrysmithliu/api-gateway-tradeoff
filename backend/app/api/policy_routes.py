@@ -3,17 +3,22 @@ from __future__ import annotations
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
+from redis.asyncio import Redis
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db_session
+from app.core.redis import get_redis_client
 from app.schemas.policy import PolicyCreateRequest, PolicyResponse, PolicyUpdateRequest
 from app.services.policy_service import PolicyService
 
 router = APIRouter(prefix="/policies", tags=["policies"])
 
 
-async def get_policy_service(db: AsyncSession = Depends(get_db_session)) -> PolicyService:
-    return PolicyService(db)
+async def get_policy_service(
+    db: AsyncSession = Depends(get_db_session),
+    redis_client: Redis = Depends(get_redis_client),
+) -> PolicyService:
+    return PolicyService(db, redis_client)
 
 
 @router.get("", response_model=list[PolicyResponse])
