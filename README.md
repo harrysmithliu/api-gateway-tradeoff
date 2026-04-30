@@ -136,3 +136,7 @@ Current sanity test files:
 The screenshot below reflects the current Fixed Window simulation controls page used by the frontend mode.
 
 ![Fixed Window Simulation Controls](docs/screenshots/1.png)
+
+The screenshot below shows the live dashboard state during simulation, including KPI updates and runtime visualization.
+
+![Fixed Window Live Dashboard](docs/screenshots/2.png)

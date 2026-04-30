@@ -16,13 +16,14 @@ import (
 )
 
 var (
-	ErrNotFound            = errors.New("not found")
-	ErrConflict            = errors.New("conflict")
-	ErrInvalidInput        = errors.New("invalid input")
-	ErrUnsupportedInM1     = errors.New("algorithm not available in current milestone")
-	ErrDisabledPolicy      = errors.New("disabled policy")
-	ErrNoActivePolicy      = errors.New("no active policy")
-	ErrActivePolicyMissing = errors.New("active policy target missing")
+	ErrNotFound                  = errors.New("not found")
+	ErrConflict                  = errors.New("conflict")
+	ErrInvalidInput              = errors.New("invalid input")
+	ErrUnsupportedInCurrentPhase = errors.New("algorithm not available in current milestone")
+	ErrUnsupportedInM1           = ErrUnsupportedInCurrentPhase
+	ErrDisabledPolicy            = errors.New("disabled policy")
+	ErrNoActivePolicy            = errors.New("no active policy")
+	ErrActivePolicyMissing       = errors.New("active policy target missing")
 )
 
 type Service struct {
@@ -56,7 +57,7 @@ func (s *Service) List(ctx context.Context) ([]Policy, error) {
 }
 
 func (s *Service) Create(ctx context.Context, req CreateRequest) (Policy, error) {
-	if err := validateAlgorithmForM1(req.Algorithm); err != nil {
+	if err := validateAlgorithmForCurrentPhase(req.Algorithm); err != nil {
 		return Policy{}, err
 	}
 	params, err := validateParams(req.Algorithm, req.ParamsJSON)
@@ -107,7 +108,7 @@ func (s *Service) Update(ctx context.Context, id string, req UpdateRequest) (Pol
 	if req.Algorithm != nil {
 		algorithm = *req.Algorithm
 	}
-	if err := validateAlgorithmForM1(algorithm); err != nil {
+	if err := validateAlgorithmForCurrentPhase(algorithm); err != nil {
 		return Policy{}, err
 	}
 
@@ -161,38 +162,53 @@ func (s *Service) Activate(ctx context.Context, id string, resetRuntime bool) (P
 		return Policy{}, ErrDisabledPolicy
 	}
 
-	_, err = s.pool.Exec(ctx, `
-		INSERT INTO active_policy (id, policy_id, updated_at)
-		VALUES (1, $1, now())
-		ON CONFLICT (id) DO UPDATE SET policy_id = EXCLUDED.policy_id, updated_at = now()
-	`, id)
-	if err != nil {
-		return Policy{}, err
-	}
-
 	if resetRuntime {
 		if err := s.store.ScanDelete(ctx, fmt.Sprintf("rl:*:%s:*", id), 500); err != nil {
 			return Policy{}, err
 		}
 	}
+
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO active_policy (id, policy_id, active_algorithm, active_policy_id, updated_at)
+		VALUES (1, $1, $2, $3, now())
+		ON CONFLICT (id) DO UPDATE SET
+			policy_id = EXCLUDED.policy_id,
+			active_algorithm = EXCLUDED.active_algorithm,
+			active_policy_id = EXCLUDED.active_policy_id,
+			updated_at = now()
+	`, id, policy.Algorithm, id)
+	if err != nil {
+		return Policy{}, err
+	}
 	return policy, nil
 }
 
 func (s *Service) Active(ctx context.Context) (Policy, error) {
-	var policyID string
-	err := s.pool.QueryRow(ctx, `SELECT policy_id FROM active_policy WHERE id = 1`).Scan(&policyID)
+	var activeAlgorithm, policyID string
+	err := s.pool.QueryRow(ctx, `
+		SELECT active_algorithm, active_policy_id
+		FROM active_policy
+		WHERE id = 1
+	`).Scan(&activeAlgorithm, &policyID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Policy{}, ErrNoActivePolicy
 		}
 		return Policy{}, err
 	}
+	if strings.TrimSpace(activeAlgorithm) == "" || strings.TrimSpace(policyID) == "" {
+		return Policy{}, ErrNoActivePolicy
+	}
+
 	policy, err := s.GetByID(ctx, policyID)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			return Policy{}, ErrActivePolicyMissing
 		}
 		return Policy{}, err
+	}
+	if policy.Algorithm != activeAlgorithm {
+		return Policy{}, ErrActivePolicyMissing
 	}
 	return policy, nil
 }
@@ -214,20 +230,28 @@ func scanPolicy(row scanner) (Policy, error) {
 	return item, nil
 }
 
-func validateAlgorithmForM1(algorithm string) error {
+func validateAlgorithmForCurrentPhase(algorithm string) error {
 	if strings.TrimSpace(algorithm) == "" {
 		return ErrInvalidInput
 	}
-	if algorithm != "fixed_window" {
-		return ErrUnsupportedInM1
+	switch algorithm {
+	case "fixed_window", "sliding_log":
+		return nil
+	default:
+		return ErrUnsupportedInCurrentPhase
 	}
-	return nil
 }
 
 func validateParams(algorithm string, params map[string]any) (map[string]any, error) {
-	if algorithm != "fixed_window" {
-		return nil, ErrUnsupportedInM1
+	switch algorithm {
+	case "fixed_window", "sliding_log":
+		return validateWindowAndLimit(params)
+	default:
+		return nil, ErrUnsupportedInCurrentPhase
 	}
+}
+
+func validateWindowAndLimit(params map[string]any) (map[string]any, error) {
 	window, ok := toPositiveInt(params["window_size_sec"])
 	if !ok {
 		return nil, fmt.Errorf("%w: window_size_sec must be > 0", ErrInvalidInput)

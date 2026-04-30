@@ -24,6 +24,10 @@ func (f *fakeStore) Expire(ctx context.Context, key string, seconds int) error {
 	return nil
 }
 
+func (f *fakeStore) EvalSlidingLog(ctx context.Context, key string, nowMS int64, windowSizeSec int, limit int, requestToken string) (SlidingLogResult, error) {
+	return SlidingLogResult{}, nil
+}
+
 func TestFixedWindowAllowsUnderLimit(t *testing.T) {
 	store := newFakeStore()
 	lim := NewFixedWindowLimiter(store)
@@ -35,6 +39,9 @@ func TestFixedWindowAllowsUnderLimit(t *testing.T) {
 
 	if !first.Allowed || !second.Allowed {
 		t.Fatalf("expected both requests allowed")
+	}
+	if got := second.AlgorithmState["state_schema_version"]; got != 1 {
+		t.Fatalf("expected state_schema_version=1, got %v", got)
 	}
 }
 

@@ -2,6 +2,8 @@ package runtime
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"time"
 
 	redis "github.com/redis/go-redis/v9"
@@ -10,6 +12,39 @@ import (
 type RedisStore struct {
 	client *redis.Client
 }
+
+var slidingLogScript = redis.NewScript(`
+local key = KEYS[1]
+local now_ms = tonumber(ARGV[1])
+local window_ms = tonumber(ARGV[2])
+local limit = tonumber(ARGV[3])
+local member = ARGV[4]
+local ttl_sec = tonumber(ARGV[5])
+
+local window_start_ms = now_ms - window_ms
+redis.call("ZREMRANGEBYSCORE", key, "-inf", window_start_ms - 1)
+
+local count = redis.call("ZCARD", key)
+if count < limit then
+  redis.call("ZADD", key, now_ms, member)
+  count = count + 1
+  redis.call("EXPIRE", key, ttl_sec)
+  return {1, count, limit - count, 0, window_start_ms, math.floor(window_ms / 1000)}
+end
+
+local oldest = redis.call("ZRANGE", key, 0, 0, "WITHSCORES")
+local retry_after_ms = 1
+if oldest[2] ~= nil then
+  local earliest_ms = tonumber(oldest[2])
+  retry_after_ms = (earliest_ms + window_ms) - now_ms
+  if retry_after_ms < 1 then
+    retry_after_ms = 1
+  end
+end
+
+redis.call("EXPIRE", key, ttl_sec)
+return {0, count, 0, retry_after_ms, window_start_ms, math.floor(window_ms / 1000)}
+`)
 
 func NewRedisStore(redisURL string) (*RedisStore, error) {
 	opts, err := redis.ParseURL(redisURL)
@@ -25,6 +60,57 @@ func (s *RedisStore) Incr(ctx context.Context, key string) (int64, error) {
 
 func (s *RedisStore) Expire(ctx context.Context, key string, ttl time.Duration) error {
 	return s.client.Expire(ctx, key, ttl).Err()
+}
+
+func (s *RedisStore) EvalSlidingLog(ctx context.Context, key string, nowMS int64, windowSizeSec int, limit int, requestToken string) (SlidingLogEvalResult, error) {
+	if windowSizeSec <= 0 || limit <= 0 {
+		return SlidingLogEvalResult{}, fmt.Errorf("invalid sliding log args: window_size_sec and limit must be positive")
+	}
+
+	windowMS := int64(windowSizeSec * 1000)
+	raw, err := slidingLogScript.Run(ctx, s.client, []string{key}, nowMS, windowMS, limit, requestToken, windowSizeSec+1).Result()
+	if err != nil {
+		return SlidingLogEvalResult{}, err
+	}
+
+	values, ok := raw.([]any)
+	if !ok || len(values) != 6 {
+		return SlidingLogEvalResult{}, fmt.Errorf("unexpected sliding log script response format")
+	}
+
+	allowedInt, err := asInt64(values[0])
+	if err != nil {
+		return SlidingLogEvalResult{}, fmt.Errorf("parse allowed: %w", err)
+	}
+	count, err := asInt64(values[1])
+	if err != nil {
+		return SlidingLogEvalResult{}, fmt.Errorf("parse count: %w", err)
+	}
+	remainingInt, err := asInt64(values[2])
+	if err != nil {
+		return SlidingLogEvalResult{}, fmt.Errorf("parse remaining: %w", err)
+	}
+	retryAfterInt, err := asInt64(values[3])
+	if err != nil {
+		return SlidingLogEvalResult{}, fmt.Errorf("parse retry_after_ms: %w", err)
+	}
+	windowStartMS, err := asInt64(values[4])
+	if err != nil {
+		return SlidingLogEvalResult{}, fmt.Errorf("parse window_start_ms: %w", err)
+	}
+	windowSize, err := asInt64(values[5])
+	if err != nil {
+		return SlidingLogEvalResult{}, fmt.Errorf("parse window_size_sec: %w", err)
+	}
+
+	return SlidingLogEvalResult{
+		Allowed:      allowedInt == 1,
+		Count:        count,
+		Remaining:    int(remainingInt),
+		RetryAfterMS: int(retryAfterInt),
+		WindowStart:  windowStartMS,
+		WindowSize:   int(windowSize),
+	}, nil
 }
 
 func (s *RedisStore) Ping(ctx context.Context) error {
@@ -49,4 +135,23 @@ func (s *RedisStore) ScanDelete(ctx context.Context, pattern string, batch int64
 		}
 	}
 	return nil
+}
+
+func asInt64(value any) (int64, error) {
+	switch v := value.(type) {
+	case int64:
+		return v, nil
+	case int:
+		return int64(v), nil
+	case float64:
+		return int64(v), nil
+	case string:
+		parsed, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("unexpected type %T", value)
+	}
 }

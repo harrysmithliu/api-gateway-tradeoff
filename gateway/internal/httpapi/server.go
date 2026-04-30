@@ -136,7 +136,7 @@ func (s *Server) mapPolicyError(w http.ResponseWriter, err error) bool {
 		writeError(w, http.StatusNotFound, "Policy not found.")
 	case err == policy.ErrConflict:
 		writeError(w, http.StatusConflict, "Policy name already exists.")
-	case err == policy.ErrUnsupportedInM1:
+	case err == policy.ErrUnsupportedInCurrentPhase || err == policy.ErrUnsupportedInM1:
 		writeError(w, http.StatusUnprocessableEntity, "Algorithm is not available in current milestone.")
 	case err == policy.ErrInvalidInput:
 		writeError(w, http.StatusUnprocessableEntity, "Invalid request payload.")

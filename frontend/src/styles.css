@@ -14,10 +14,54 @@ body {
   color: #0f172a;
 }
 
+.app-shell {
+  max-width: 1280px;
+  margin: 18px auto 40px;
+  padding: 0 12px;
+  display: grid;
+  gap: 14px;
+}
+
+.app-top-nav {
+  padding: 14px 16px;
+}
+
+.tab-nav {
+  margin-top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.tab-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 600;
+  background: #ffffff;
+}
+
+.tab-link.active {
+  border-color: #0f766e;
+  color: #ffffff;
+  background: #0f766e;
+}
+
+.tab-link.disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .dashboard-shell {
   max-width: 1240px;
-  margin: 20px auto 40px;
-  padding: 0 14px;
+  margin: 0 auto;
+  padding: 0 2px;
   display: grid;
   gap: 14px;
 }
@@ -185,6 +229,7 @@ button:disabled {
   gap: 8px;
   text-transform: none;
   letter-spacing: normal;
+  white-space: nowrap;
 }
 
 .table-wrap {

@@ -85,3 +85,18 @@ func (a *storeAdapter) Expire(ctx context.Context, key string, seconds int) erro
 	}
 	return a.store.Expire(ctx, key, time.Duration(seconds)*time.Second)
 }
+
+func (a *storeAdapter) EvalSlidingLog(ctx context.Context, key string, nowMS int64, windowSizeSec int, limit int, requestToken string) (limiter.SlidingLogResult, error) {
+	res, err := a.store.EvalSlidingLog(ctx, key, nowMS, windowSizeSec, limit, requestToken)
+	if err != nil {
+		return limiter.SlidingLogResult{}, err
+	}
+	return limiter.SlidingLogResult{
+		Allowed:       res.Allowed,
+		Count:         res.Count,
+		Remaining:     res.Remaining,
+		RetryAfterMS:  res.RetryAfterMS,
+		WindowStartMS: res.WindowStart,
+		WindowSizeSec: res.WindowSize,
+	}, nil
+}

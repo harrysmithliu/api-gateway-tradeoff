@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -106,6 +107,27 @@ func (f fakeSimulator) Evaluate(ctx context.Context, clientID string) (simulate.
 	}, nil
 }
 
+type scriptedSimulator struct {
+	mu        sync.Mutex
+	responses []simulate.Response
+	index     int
+}
+
+func (s *scriptedSimulator) Evaluate(ctx context.Context, clientID string) (simulate.Response, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if len(s.responses) == 0 {
+		return simulate.Response{}, nil
+	}
+	if s.index >= len(s.responses) {
+		return s.responses[len(s.responses)-1], nil
+	}
+	resp := s.responses[s.index]
+	s.index++
+	return resp, nil
+}
+
 func newTestServer(sim Simulator, policies PolicyManager) http.Handler {
 	cfg := config.Config{AppName: "test", Environment: "test", CorsAllowedOrigins: []string{"*"}}
 	proxySvc := proxy.NewService(config.Config{
@@ -189,5 +211,94 @@ func TestPolicyLifecycleRoutes(t *testing.T) {
 	h.ServeHTTP(activeRes, activeReq)
 	if activeRes.Code != http.StatusOK {
 		t.Fatalf("active expected 200 got %d", activeRes.Code)
+	}
+}
+
+func TestSlidingLogPolicyAndSimulateProgression(t *testing.T) {
+	pm := newFakePolicyManager()
+	now := time.Now().UTC()
+	reason := "rate_limit_exceeded"
+	retry := 800
+	two := 2
+	one := 1
+	zero := 0
+
+	sim := &scriptedSimulator{
+		responses: []simulate.Response{
+			{
+				RequestID: "req-allow-1",
+				TS:        now,
+				PolicyID:  "pid-sl-1",
+				Algorithm: "sliding_log",
+				Allowed:   true,
+				LatencyMS: 1,
+				Remaining: &two,
+			},
+			{
+				RequestID: "req-allow-2",
+				TS:        now.Add(10 * time.Millisecond),
+				PolicyID:  "pid-sl-1",
+				Algorithm: "sliding_log",
+				Allowed:   true,
+				LatencyMS: 1,
+				Remaining: &one,
+			},
+			{
+				RequestID:    "req-blocked",
+				TS:           now.Add(20 * time.Millisecond),
+				PolicyID:     "pid-sl-1",
+				Algorithm:    "sliding_log",
+				Allowed:      false,
+				LatencyMS:    1,
+				Reason:       &reason,
+				RetryAfterMS: &retry,
+				Remaining:    &zero,
+			},
+		},
+	}
+	h := newTestServer(sim, pm)
+
+	create := httptest.NewRequest(http.MethodPost, "/api/policies", bytes.NewBufferString(`{"name":"sliding-p1","algorithm":"sliding_log","params_json":{"window_size_sec":60,"limit":3},"enabled":true}`))
+	create.Header.Set("Content-Type", "application/json")
+	createRes := httptest.NewRecorder()
+	h.ServeHTTP(createRes, create)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("create expected 201 got %d", createRes.Code)
+	}
+
+	var created map[string]any
+	if err := json.Unmarshal(createRes.Body.Bytes(), &created); err != nil {
+		t.Fatalf("create payload parse failed: %v", err)
+	}
+	if created["algorithm"] != "sliding_log" {
+		t.Fatalf("expected created algorithm sliding_log, got %v", created["algorithm"])
+	}
+
+	activateReq := httptest.NewRequest(http.MethodPost, "/api/policies/00000000-0000-0000-0000-000000000002/activate", nil)
+	activateRes := httptest.NewRecorder()
+	h.ServeHTTP(activateRes, activateReq)
+	if activateRes.Code != http.StatusOK {
+		t.Fatalf("activate expected 200 got %d", activateRes.Code)
+	}
+
+	callSimulate := func() (int, map[string]any) {
+		req := httptest.NewRequest(http.MethodPost, "/api/simulate/request", bytes.NewBufferString(`{"client_id":"client-a"}`))
+		req.Header.Set("Content-Type", "application/json")
+		res := httptest.NewRecorder()
+		h.ServeHTTP(res, req)
+		var payload map[string]any
+		_ = json.Unmarshal(res.Body.Bytes(), &payload)
+		return res.Code, payload
+	}
+
+	code1, payload1 := callSimulate()
+	code2, payload2 := callSimulate()
+	code3, payload3 := callSimulate()
+
+	if code1 != http.StatusOK || code2 != http.StatusOK || code3 != http.StatusTooManyRequests {
+		t.Fatalf("expected status progression 200,200,429 got %d,%d,%d", code1, code2, code3)
+	}
+	if payload1["algorithm"] != "sliding_log" || payload2["algorithm"] != "sliding_log" || payload3["algorithm"] != "sliding_log" {
+		t.Fatalf("expected sliding_log algorithm in all simulate responses")
 	}
 }
