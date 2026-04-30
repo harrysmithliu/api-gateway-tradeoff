@@ -319,7 +319,7 @@ export function Dashboard() {
       setActivePolicy(activated);
       setInfoMessage(
         resetRuntimeState
-          ? "Policy activated. Runtime state reset is not effective yet and will be supported soon."
+          ? "Policy activated and runtime state reset requested."
           : "Policy activated.",
       );
     } catch (error) {

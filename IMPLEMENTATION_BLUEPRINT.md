@@ -1,5 +1,12 @@
 # API Gateway Rate Limiter Simulator - Implementation Blueprint
 
+> Status: Superseded for execution sequencing.
+>
+> For active implementation order and scope, use:
+> `REQUIREMENTS_BACKEND_INCREMENTAL.md`
+>
+> This document remains as a historical full-stack reference.
+
 ## 1. Document Objective
 This blueprint defines an "industry-style minimum runnable" rate-limiting simulation system with:
 - A Python backend that supports hot-switching across 5 rate limiter algorithms

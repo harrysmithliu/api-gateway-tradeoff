@@ -58,3 +58,15 @@ tmp/
 
 # Docker and compose overrides
 docker-compose.override.yml
+
+# Sample or local demo projects
+sample-gateway/
+
+# Go
+bin/
+*.test
+coverage.out
+.coverprofile
+*.exe
+*.dll
+*.dylib

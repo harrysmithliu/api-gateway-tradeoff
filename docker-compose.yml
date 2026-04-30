@@ -29,15 +29,18 @@ services:
       timeout: 3s
       retries: 10
 
-  backend:
+  gateway:
     build:
-      context: ./backend
+      context: ./gateway
     environment:
-      POSTGRES_DSN: postgresql+asyncpg://postgres:postgres@postgres:5432/rate_limiter
+      POSTGRES_DSN: postgresql://postgres:postgres@postgres:5432/rate_limiter
       REDIS_URL: redis://redis:6379/0
-      API_PORT: 8000
+      GATEWAY_PORT: 8000
       LOG_LEVEL: INFO
       ENVIRONMENT: docker
+      GATEWAY_USER_SERVICE_URL: http://user-service:8001
+      GATEWAY_PRODUCT_SERVICE_URL: http://product-service:8002
+      GATEWAY_ORDER_SERVICE_URL: http://order-service:8003
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,7 +61,7 @@ services:
     environment:
       VITE_API_BASE_URL: http://localhost:8000
     depends_on:
-      backend:
+      gateway:
         condition: service_healthy
     ports:
       - "5173:5173"

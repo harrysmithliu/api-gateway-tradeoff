@@ -149,12 +149,10 @@ export function PolicyPanel({
         </button>
         <button
           type="button"
-          className="warning"
           onClick={() => onActivatePolicy(true)}
           disabled={isActivating || !draft.id}
-          title="Backend runtime key cleanup is not available yet."
         >
-          Activate + Reset Runtime State (Not effective yet / Coming soon)
+          Activate + Reset Runtime State
         </button>
       </div>
 

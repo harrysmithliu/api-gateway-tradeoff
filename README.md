@@ -80,9 +80,8 @@ The dashboard is a single-page control panel with five sections:
 
 ### Runtime State Reset Button Status
 
-The UI includes `Activate + Reset Runtime State` for forward compatibility.  
-Current backend behavior accepts `reset_runtime_state=true`, but Redis runtime key cleanup is not active yet.  
-In this version, treat it as `Activate Policy` plus a no-op reset flag.
+The UI supports `Activate + Reset Runtime State`.  
+When clicked, frontend calls policy activation with `reset_runtime_state=true` so backend can switch policy and reset runtime limiter state in one action.
 
 ### Simulation Workflow
 
