@@ -111,3 +111,16 @@ func (a *storeAdapter) EvalSlidingWindowCounter(ctx context.Context, currentKey 
 		PreviousWindowCount: res.PreviousWindowCount,
 	}, nil
 }
+
+func (a *storeAdapter) EvalTokenBucket(ctx context.Context, key string, nowMS int64, capacity int, refillRatePerSec float64, tokensPerRequest int, ttlSec int) (limiter.TokenBucketResult, error) {
+	res, err := a.store.EvalTokenBucket(ctx, key, nowMS, capacity, refillRatePerSec, tokensPerRequest, ttlSec)
+	if err != nil {
+		return limiter.TokenBucketResult{}, err
+	}
+	return limiter.TokenBucketResult{
+		Allowed:      res.Allowed,
+		Tokens:       res.Tokens,
+		LastRefillMS: res.LastRefillMS,
+		RetryAfterMS: res.RetryAfterMS,
+	}, nil
+}

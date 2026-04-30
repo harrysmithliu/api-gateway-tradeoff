@@ -235,7 +235,7 @@ func validateAlgorithmForCurrentPhase(algorithm string) error {
 		return ErrInvalidInput
 	}
 	switch algorithm {
-	case "fixed_window", "sliding_log", "sliding_window_counter":
+	case "fixed_window", "sliding_log", "sliding_window_counter", "token_bucket":
 		return nil
 	default:
 		return ErrUnsupportedInCurrentPhase
@@ -246,6 +246,8 @@ func validateParams(algorithm string, params map[string]any) (map[string]any, er
 	switch algorithm {
 	case "fixed_window", "sliding_log", "sliding_window_counter":
 		return validateWindowAndLimit(params)
+	case "token_bucket":
+		return validateTokenBucketParams(params)
 	default:
 		return nil, ErrUnsupportedInCurrentPhase
 	}
@@ -263,6 +265,31 @@ func validateWindowAndLimit(params map[string]any) (map[string]any, error) {
 	return map[string]any{"window_size_sec": window, "limit": limit}, nil
 }
 
+func validateTokenBucketParams(params map[string]any) (map[string]any, error) {
+	capacity, ok := toPositiveInt(params["capacity"])
+	if !ok {
+		return nil, fmt.Errorf("%w: capacity must be > 0", ErrInvalidInput)
+	}
+	refillRate, ok := toPositiveFloat(params["refill_rate_per_sec"])
+	if !ok {
+		return nil, fmt.Errorf("%w: refill_rate_per_sec must be > 0", ErrInvalidInput)
+	}
+	tokensPerRequest := 1
+	if raw, exists := params["tokens_per_request"]; exists {
+		value, valid := toPositiveInt(raw)
+		if !valid {
+			return nil, fmt.Errorf("%w: tokens_per_request must be > 0", ErrInvalidInput)
+		}
+		tokensPerRequest = value
+	}
+
+	return map[string]any{
+		"capacity":            capacity,
+		"refill_rate_per_sec": refillRate,
+		"tokens_per_request":  tokensPerRequest,
+	}, nil
+}
+
 func toPositiveInt(value any) (int, bool) {
 	switch v := value.(type) {
 	case float64:
@@ -276,6 +303,24 @@ func toPositiveInt(value any) (int, bool) {
 	case int64:
 		if v > 0 {
 			return int(v), true
+		}
+	}
+	return 0, false
+}
+
+func toPositiveFloat(value any) (float64, bool) {
+	switch v := value.(type) {
+	case float64:
+		if v > 0 {
+			return v, true
+		}
+	case int:
+		if v > 0 {
+			return float64(v), true
+		}
+	case int64:
+		if v > 0 {
+			return float64(v), true
 		}
 	}
 	return 0, false

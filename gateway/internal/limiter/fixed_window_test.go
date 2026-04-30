@@ -32,6 +32,10 @@ func (f *fakeStore) EvalSlidingWindowCounter(ctx context.Context, currentKey str
 	return SlidingWindowCounterResult{}, nil
 }
 
+func (f *fakeStore) EvalTokenBucket(ctx context.Context, key string, nowMS int64, capacity int, refillRatePerSec float64, tokensPerRequest int, ttlSec int) (TokenBucketResult, error) {
+	return TokenBucketResult{}, nil
+}
+
 func TestFixedWindowAllowsUnderLimit(t *testing.T) {
 	store := newFakeStore()
 	lim := NewFixedWindowLimiter(store)

@@ -144,3 +144,7 @@ The screenshot below shows the live dashboard state during simulation, including
 The screenshot below shows the multi-tab console layout with algorithm slots, including reserved tabs for upcoming milestones.
 
 ![Rate Limiter Console Tabs](docs/screenshots/3.png)
+
+The screenshot below shows the reserved Sliding Window Counter tab context in the current console workflow.
+
+![Sliding Window Counter Reserved Tab](docs/screenshots/4.png)

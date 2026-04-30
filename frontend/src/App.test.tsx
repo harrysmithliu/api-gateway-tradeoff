@@ -13,6 +13,10 @@ vi.mock("./pages/SlidingWindowCounterDashboard", () => ({
   SlidingWindowCounterDashboard: () => <div>Sliding Window Counter Page</div>,
 }));
 
+vi.mock("./pages/TokenBucketDashboard", () => ({
+  TokenBucketDashboard: () => <div>Token Bucket Page</div>,
+}));
+
 vi.mock("./pages/ComingSoonAlgorithmPage", () => ({
   ComingSoonAlgorithmPage: ({ title }: { title: string }) => <div>{title} Reserved Page</div>,
 }));
@@ -46,10 +50,21 @@ describe("App routing tabs", () => {
     expect(window.location.pathname).toBe("/sliding-window-counter");
   });
 
+  it("enables token-bucket tab without reserved suffix", () => {
+    render(<App />);
+
+    expect(screen.getByRole("link", { name: "Token Bucket" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Token Bucket (Reserved)" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "Token Bucket" }));
+    expect(screen.getByText("Token Bucket Page")).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/token-bucket");
+  });
+
   it("keeps reserved tabs non-navigable", () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole("link", { name: "Token Bucket (Reserved)" }));
+    fireEvent.click(screen.getByRole("link", { name: "Leaky Bucket (Reserved)" }));
     expect(screen.getByText("Fixed Window Page")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/fixed-window");
   });

@@ -407,3 +407,110 @@ func TestSlidingWindowCounterPolicyAndSimulateContract(t *testing.T) {
 		t.Fatalf("simulate #2 expected 429 got %d", res2.Code)
 	}
 }
+
+func TestTokenBucketPolicyAndSimulateContract(t *testing.T) {
+	pm := newFakePolicyManager()
+	now := time.Now().UTC()
+	reason := "rate_limit_exceeded"
+	retry := 1200
+	one := 1
+	zero := 0
+	allowState := map[string]any{
+		"count":                float64(1),
+		"window_start_ms":      float64(1700000000000),
+		"window_size_sec":      float64(0),
+		"state_schema_version": float64(1),
+		"tokens":               2.0,
+		"capacity":             float64(4),
+		"refill_rate_per_sec":  2.0,
+		"tokens_per_request":   float64(2),
+		"last_refill_ms":       float64(1700000000000),
+	}
+	rejectState := map[string]any{
+		"count":                float64(0),
+		"window_start_ms":      float64(1700000000050),
+		"window_size_sec":      float64(0),
+		"state_schema_version": float64(1),
+		"tokens":               0.2,
+		"capacity":             float64(4),
+		"refill_rate_per_sec":  2.0,
+		"tokens_per_request":   float64(2),
+		"last_refill_ms":       float64(1700000000050),
+	}
+
+	sim := &scriptedSimulator{
+		responses: []simulate.Response{
+			{
+				RequestID:      "req-tb-allow",
+				TS:             now,
+				PolicyID:       "pid-tb-1",
+				Algorithm:      "token_bucket",
+				Allowed:        true,
+				LatencyMS:      1,
+				Remaining:      &one,
+				AlgorithmState: allowState,
+			},
+			{
+				RequestID:      "req-tb-blocked",
+				TS:             now.Add(10 * time.Millisecond),
+				PolicyID:       "pid-tb-1",
+				Algorithm:      "token_bucket",
+				Allowed:        false,
+				LatencyMS:      1,
+				Reason:         &reason,
+				RetryAfterMS:   &retry,
+				Remaining:      &zero,
+				AlgorithmState: rejectState,
+			},
+		},
+	}
+	h := newTestServer(sim, pm)
+
+	create := httptest.NewRequest(http.MethodPost, "/api/policies", bytes.NewBufferString(`{"name":"tb-p1","algorithm":"token_bucket","params_json":{"capacity":4,"refill_rate_per_sec":2,"tokens_per_request":2},"enabled":true}`))
+	create.Header.Set("Content-Type", "application/json")
+	createRes := httptest.NewRecorder()
+	h.ServeHTTP(createRes, create)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("create expected 201 got %d", createRes.Code)
+	}
+
+	activateReq := httptest.NewRequest(http.MethodPost, "/api/policies/00000000-0000-0000-0000-000000000002/activate", nil)
+	activateRes := httptest.NewRecorder()
+	h.ServeHTTP(activateRes, activateReq)
+	if activateRes.Code != http.StatusOK {
+		t.Fatalf("activate expected 200 got %d", activateRes.Code)
+	}
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/simulate/request", bytes.NewBufferString(`{"client_id":"client-tb"}`))
+	req1.Header.Set("Content-Type", "application/json")
+	res1 := httptest.NewRecorder()
+	h.ServeHTTP(res1, req1)
+	if res1.Code != http.StatusOK {
+		t.Fatalf("simulate #1 expected 200 got %d", res1.Code)
+	}
+
+	var payload1 map[string]any
+	if err := json.Unmarshal(res1.Body.Bytes(), &payload1); err != nil {
+		t.Fatalf("simulate #1 payload parse failed: %v", err)
+	}
+	if payload1["algorithm"] != "token_bucket" {
+		t.Fatalf("simulate #1 expected token_bucket algorithm")
+	}
+	state1, ok := payload1["algorithm_state"].(map[string]any)
+	if !ok {
+		t.Fatalf("simulate #1 expected algorithm_state object")
+	}
+	for _, field := range []string{"count", "window_start_ms", "window_size_sec", "state_schema_version", "tokens", "capacity", "refill_rate_per_sec", "tokens_per_request", "last_refill_ms"} {
+		if _, exists := state1[field]; !exists {
+			t.Fatalf("simulate #1 missing algorithm_state field: %s", field)
+		}
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/simulate/request", bytes.NewBufferString(`{"client_id":"client-tb"}`))
+	req2.Header.Set("Content-Type", "application/json")
+	res2 := httptest.NewRecorder()
+	h.ServeHTTP(res2, req2)
+	if res2.Code != http.StatusTooManyRequests {
+		t.Fatalf("simulate #2 expected 429 got %d", res2.Code)
+	}
+}

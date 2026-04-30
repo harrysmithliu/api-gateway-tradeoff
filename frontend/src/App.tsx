@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from "react";
 import { FixedWindowDashboard } from "./pages/FixedWindowDashboard";
 import { SlidingLogDashboard } from "./pages/SlidingLogDashboard";
 import { SlidingWindowCounterDashboard } from "./pages/SlidingWindowCounterDashboard";
+import { TokenBucketDashboard } from "./pages/TokenBucketDashboard";
 import { ComingSoonAlgorithmPage } from "./pages/ComingSoonAlgorithmPage";
 
 type RouteConfig = {
@@ -34,8 +35,8 @@ const ROUTES: RouteConfig[] = [
   {
     path: "/token-bucket",
     label: "Token Bucket",
-    enabled: false,
-    render: () => <ComingSoonAlgorithmPage title="Token Bucket" />,
+    enabled: true,
+    render: () => <TokenBucketDashboard />,
   },
   {
     path: "/leaky-bucket",

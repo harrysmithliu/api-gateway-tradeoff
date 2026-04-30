@@ -64,6 +64,55 @@ end
 return {current_count, previous_count}
 `)
 
+var tokenBucketScript = redis.NewScript(`
+local key = KEYS[1]
+local now_ms = tonumber(ARGV[1])
+local capacity = tonumber(ARGV[2])
+local refill_rate_per_sec = tonumber(ARGV[3])
+local tokens_per_request = tonumber(ARGV[4])
+local ttl_sec = tonumber(ARGV[5])
+
+local fields = redis.call("HMGET", key, "tokens", "last_refill_ms")
+local tokens = tonumber(fields[1])
+local last_refill_ms = tonumber(fields[2])
+
+if tokens == nil then
+  tokens = capacity
+end
+if last_refill_ms == nil then
+  last_refill_ms = now_ms
+end
+
+local elapsed_ms = now_ms - last_refill_ms
+if elapsed_ms < 0 then
+  elapsed_ms = 0
+end
+
+tokens = tokens + (elapsed_ms / 1000.0) * refill_rate_per_sec
+if tokens > capacity then
+  tokens = capacity
+end
+
+local allowed = 0
+local retry_after_ms = 0
+
+if tokens >= tokens_per_request then
+  allowed = 1
+  tokens = tokens - tokens_per_request
+else
+  local need = tokens_per_request - tokens
+  retry_after_ms = math.ceil((need / refill_rate_per_sec) * 1000)
+  if retry_after_ms < 1 then
+    retry_after_ms = 1
+  end
+end
+
+redis.call("HSET", key, "tokens", tokens, "last_refill_ms", now_ms)
+redis.call("EXPIRE", key, ttl_sec)
+
+return {allowed, tokens, now_ms, retry_after_ms}
+`)
+
 func NewRedisStore(redisURL string) (*RedisStore, error) {
 	opts, err := redis.ParseURL(redisURL)
 	if err != nil {
@@ -161,6 +210,46 @@ func (s *RedisStore) EvalSlidingWindowCounter(ctx context.Context, currentKey st
 	}, nil
 }
 
+func (s *RedisStore) EvalTokenBucket(ctx context.Context, key string, nowMS int64, capacity int, refillRatePerSec float64, tokensPerRequest int, ttlSec int) (TokenBucketEvalResult, error) {
+	if capacity <= 0 || refillRatePerSec <= 0 || tokensPerRequest <= 0 || ttlSec <= 0 {
+		return TokenBucketEvalResult{}, fmt.Errorf("invalid token bucket args")
+	}
+
+	raw, err := tokenBucketScript.Run(ctx, s.client, []string{key}, nowMS, capacity, refillRatePerSec, tokensPerRequest, ttlSec).Result()
+	if err != nil {
+		return TokenBucketEvalResult{}, err
+	}
+
+	values, ok := raw.([]any)
+	if !ok || len(values) != 4 {
+		return TokenBucketEvalResult{}, fmt.Errorf("unexpected token bucket script response format")
+	}
+
+	allowedInt, err := asInt64(values[0])
+	if err != nil {
+		return TokenBucketEvalResult{}, fmt.Errorf("parse allowed: %w", err)
+	}
+	tokens, err := asFloat64(values[1])
+	if err != nil {
+		return TokenBucketEvalResult{}, fmt.Errorf("parse tokens: %w", err)
+	}
+	lastRefillMS, err := asInt64(values[2])
+	if err != nil {
+		return TokenBucketEvalResult{}, fmt.Errorf("parse last_refill_ms: %w", err)
+	}
+	retryAfterMS, err := asInt64(values[3])
+	if err != nil {
+		return TokenBucketEvalResult{}, fmt.Errorf("parse retry_after_ms: %w", err)
+	}
+
+	return TokenBucketEvalResult{
+		Allowed:      allowedInt == 1,
+		Tokens:       tokens,
+		LastRefillMS: lastRefillMS,
+		RetryAfterMS: int(retryAfterMS),
+	}, nil
+}
+
 func (s *RedisStore) Ping(ctx context.Context) error {
 	return s.client.Ping(ctx).Err()
 }
@@ -195,6 +284,25 @@ func asInt64(value any) (int64, error) {
 		return int64(v), nil
 	case string:
 		parsed, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return parsed, nil
+	default:
+		return 0, fmt.Errorf("unexpected type %T", value)
+	}
+}
+
+func asFloat64(value any) (float64, error) {
+	switch v := value.(type) {
+	case float64:
+		return v, nil
+	case int64:
+		return float64(v), nil
+	case int:
+		return float64(v), nil
+	case string:
+		parsed, err := strconv.ParseFloat(v, 64)
 		if err != nil {
 			return 0, err
 		}

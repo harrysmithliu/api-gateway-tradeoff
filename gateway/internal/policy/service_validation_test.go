@@ -14,8 +14,14 @@ func TestValidateAlgorithmForCurrentPhaseAcceptsSlidingWindowCounter(t *testing.
 	}
 }
 
+func TestValidateAlgorithmForCurrentPhaseAcceptsTokenBucket(t *testing.T) {
+	if err := validateAlgorithmForCurrentPhase("token_bucket"); err != nil {
+		t.Fatalf("expected token_bucket to be accepted, got error: %v", err)
+	}
+}
+
 func TestValidateAlgorithmForCurrentPhaseRejectsFutureAlgorithm(t *testing.T) {
-	if err := validateAlgorithmForCurrentPhase("token_bucket"); err != ErrUnsupportedInCurrentPhase {
+	if err := validateAlgorithmForCurrentPhase("leaky_bucket"); err != ErrUnsupportedInCurrentPhase {
 		t.Fatalf("expected ErrUnsupportedInCurrentPhase, got: %v", err)
 	}
 }
@@ -52,5 +58,32 @@ func TestValidateParamsAcceptsSlidingWindowCounterSchema(t *testing.T) {
 	}
 	if params["window_size_sec"] != 30 || params["limit"] != 20 {
 		t.Fatalf("unexpected swc normalized params: %+v", params)
+	}
+}
+
+func TestValidateParamsAcceptsTokenBucketSchema(t *testing.T) {
+	params, err := validateParams("token_bucket", map[string]any{
+		"capacity":            20,
+		"refill_rate_per_sec": 2.5,
+		"tokens_per_request":  3,
+	})
+	if err != nil {
+		t.Fatalf("expected valid token bucket params, got error: %v", err)
+	}
+	if params["capacity"] != 20 || params["refill_rate_per_sec"] != 2.5 || params["tokens_per_request"] != 3 {
+		t.Fatalf("unexpected token bucket normalized params: %+v", params)
+	}
+}
+
+func TestValidateParamsTokenBucketDefaultsTokensPerRequest(t *testing.T) {
+	params, err := validateParams("token_bucket", map[string]any{
+		"capacity":            20,
+		"refill_rate_per_sec": 2.5,
+	})
+	if err != nil {
+		t.Fatalf("expected valid token bucket params, got error: %v", err)
+	}
+	if params["tokens_per_request"] != 1 {
+		t.Fatalf("expected default tokens_per_request=1, got %+v", params["tokens_per_request"])
 	}
 }

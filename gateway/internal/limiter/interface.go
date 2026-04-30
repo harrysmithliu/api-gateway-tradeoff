@@ -16,11 +16,19 @@ type SlidingWindowCounterResult struct {
 	PreviousWindowCount int64
 }
 
+type TokenBucketResult struct {
+	Allowed      bool
+	Tokens       float64
+	LastRefillMS int64
+	RetryAfterMS int
+}
+
 type RuntimeCounter interface {
 	Incr(ctx context.Context, key string) (int64, error)
 	Expire(ctx context.Context, key string, seconds int) error
 	EvalSlidingLog(ctx context.Context, key string, nowMS int64, windowSizeSec int, limit int, requestToken string) (SlidingLogResult, error)
 	EvalSlidingWindowCounter(ctx context.Context, currentKey string, previousKey string, ttlSec int) (SlidingWindowCounterResult, error)
+	EvalTokenBucket(ctx context.Context, key string, nowMS int64, capacity int, refillRatePerSec float64, tokensPerRequest int, ttlSec int) (TokenBucketResult, error)
 }
 
 type Limiter interface {

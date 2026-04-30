@@ -69,6 +69,10 @@ func (f *fakeSlidingLogStore) EvalSlidingWindowCounter(ctx context.Context, curr
 	return SlidingWindowCounterResult{}, nil
 }
 
+func (f *fakeSlidingLogStore) EvalTokenBucket(ctx context.Context, key string, nowMS int64, capacity int, refillRatePerSec float64, tokensPerRequest int, ttlSec int) (TokenBucketResult, error) {
+	return TokenBucketResult{}, nil
+}
+
 func TestSlidingLogAllowsUnderLimit(t *testing.T) {
 	store := newFakeSlidingLogStore()
 	lim := NewSlidingLogLimiter(store)
