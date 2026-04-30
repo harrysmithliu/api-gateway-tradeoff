@@ -235,7 +235,7 @@ func validateAlgorithmForCurrentPhase(algorithm string) error {
 		return ErrInvalidInput
 	}
 	switch algorithm {
-	case "fixed_window", "sliding_log":
+	case "fixed_window", "sliding_log", "sliding_window_counter":
 		return nil
 	default:
 		return ErrUnsupportedInCurrentPhase
@@ -244,7 +244,7 @@ func validateAlgorithmForCurrentPhase(algorithm string) error {
 
 func validateParams(algorithm string, params map[string]any) (map[string]any, error) {
 	switch algorithm {
-	case "fixed_window", "sliding_log":
+	case "fixed_window", "sliding_log", "sliding_window_counter":
 		return validateWindowAndLimit(params)
 	default:
 		return nil, ErrUnsupportedInCurrentPhase

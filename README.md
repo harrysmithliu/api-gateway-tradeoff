@@ -140,3 +140,7 @@ The screenshot below reflects the current Fixed Window simulation controls page 
 The screenshot below shows the live dashboard state during simulation, including KPI updates and runtime visualization.
 
 ![Fixed Window Live Dashboard](docs/screenshots/2.png)
+
+The screenshot below shows the multi-tab console layout with algorithm slots, including reserved tabs for upcoming milestones.
+
+![Rate Limiter Console Tabs](docs/screenshots/3.png)

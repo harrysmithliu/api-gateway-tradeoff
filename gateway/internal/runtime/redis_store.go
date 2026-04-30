@@ -46,6 +46,24 @@ redis.call("EXPIRE", key, ttl_sec)
 return {0, count, 0, retry_after_ms, window_start_ms, math.floor(window_ms / 1000)}
 `)
 
+var slidingWindowCounterScript = redis.NewScript(`
+local current_key = KEYS[1]
+local previous_key = KEYS[2]
+local ttl_sec = tonumber(ARGV[1])
+
+local current_count = redis.call("INCR", current_key)
+redis.call("EXPIRE", current_key, ttl_sec)
+
+local previous_count = redis.call("GET", previous_key)
+if previous_count == false then
+  previous_count = 0
+else
+  previous_count = tonumber(previous_count)
+end
+
+return {current_count, previous_count}
+`)
+
 func NewRedisStore(redisURL string) (*RedisStore, error) {
 	opts, err := redis.ParseURL(redisURL)
 	if err != nil {
@@ -110,6 +128,36 @@ func (s *RedisStore) EvalSlidingLog(ctx context.Context, key string, nowMS int64
 		RetryAfterMS: int(retryAfterInt),
 		WindowStart:  windowStartMS,
 		WindowSize:   int(windowSize),
+	}, nil
+}
+
+func (s *RedisStore) EvalSlidingWindowCounter(ctx context.Context, currentKey string, previousKey string, ttlSec int) (SlidingWindowCounterEvalResult, error) {
+	if ttlSec <= 0 {
+		return SlidingWindowCounterEvalResult{}, fmt.Errorf("invalid sliding window counter args: ttlSec must be positive")
+	}
+
+	raw, err := slidingWindowCounterScript.Run(ctx, s.client, []string{currentKey, previousKey}, ttlSec).Result()
+	if err != nil {
+		return SlidingWindowCounterEvalResult{}, err
+	}
+
+	values, ok := raw.([]any)
+	if !ok || len(values) != 2 {
+		return SlidingWindowCounterEvalResult{}, fmt.Errorf("unexpected sliding window counter script response format")
+	}
+
+	currentCount, err := asInt64(values[0])
+	if err != nil {
+		return SlidingWindowCounterEvalResult{}, fmt.Errorf("parse current_count: %w", err)
+	}
+	previousCount, err := asInt64(values[1])
+	if err != nil {
+		return SlidingWindowCounterEvalResult{}, fmt.Errorf("parse previous_count: %w", err)
+	}
+
+	return SlidingWindowCounterEvalResult{
+		CurrentWindowCount:  currentCount,
+		PreviousWindowCount: previousCount,
 	}, nil
 }
 

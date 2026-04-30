@@ -65,6 +65,10 @@ func (f *fakeSlidingLogStore) EvalSlidingLog(ctx context.Context, key string, no
 	}, nil
 }
 
+func (f *fakeSlidingLogStore) EvalSlidingWindowCounter(ctx context.Context, currentKey string, previousKey string, ttlSec int) (SlidingWindowCounterResult, error) {
+	return SlidingWindowCounterResult{}, nil
+}
+
 func TestSlidingLogAllowsUnderLimit(t *testing.T) {
 	store := newFakeSlidingLogStore()
 	lim := NewSlidingLogLimiter(store)

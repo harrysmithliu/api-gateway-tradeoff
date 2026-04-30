@@ -10,7 +10,9 @@ func BuildLimiter(algorithm string, store RuntimeCounter) (Limiter, error) {
 		return NewFixedWindowLimiter(store), nil
 	case "sliding_log":
 		return NewSlidingLogLimiter(store), nil
-	case "sliding_window_counter", "token_bucket", "leaky_bucket":
+	case "sliding_window_counter":
+		return NewSlidingWindowCounterLimiter(store), nil
+	case "token_bucket", "leaky_bucket":
 		return nil, fmt.Errorf("algorithm '%s' is not implemented in current milestone", algorithm)
 	default:
 		return nil, fmt.Errorf("unsupported algorithm '%s'", algorithm)

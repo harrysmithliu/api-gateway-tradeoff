@@ -28,6 +28,10 @@ func (f *fakeStore) EvalSlidingLog(ctx context.Context, key string, nowMS int64,
 	return SlidingLogResult{}, nil
 }
 
+func (f *fakeStore) EvalSlidingWindowCounter(ctx context.Context, currentKey string, previousKey string, ttlSec int) (SlidingWindowCounterResult, error) {
+	return SlidingWindowCounterResult{}, nil
+}
+
 func TestFixedWindowAllowsUnderLimit(t *testing.T) {
 	store := newFakeStore()
 	lim := NewFixedWindowLimiter(store)

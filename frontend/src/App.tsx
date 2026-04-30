@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 
 import { FixedWindowDashboard } from "./pages/FixedWindowDashboard";
 import { SlidingLogDashboard } from "./pages/SlidingLogDashboard";
+import { SlidingWindowCounterDashboard } from "./pages/SlidingWindowCounterDashboard";
 import { ComingSoonAlgorithmPage } from "./pages/ComingSoonAlgorithmPage";
 
 type RouteConfig = {
@@ -27,8 +28,8 @@ const ROUTES: RouteConfig[] = [
   {
     path: "/sliding-window-counter",
     label: "Sliding Window Counter",
-    enabled: false,
-    render: () => <ComingSoonAlgorithmPage title="Sliding Window Counter" />,
+    enabled: true,
+    render: () => <SlidingWindowCounterDashboard />,
   },
   {
     path: "/token-bucket",

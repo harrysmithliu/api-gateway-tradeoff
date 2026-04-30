@@ -11,10 +11,16 @@ type SlidingLogResult struct {
 	WindowSizeSec int
 }
 
+type SlidingWindowCounterResult struct {
+	CurrentWindowCount  int64
+	PreviousWindowCount int64
+}
+
 type RuntimeCounter interface {
 	Incr(ctx context.Context, key string) (int64, error)
 	Expire(ctx context.Context, key string, seconds int) error
 	EvalSlidingLog(ctx context.Context, key string, nowMS int64, windowSizeSec int, limit int, requestToken string) (SlidingLogResult, error)
+	EvalSlidingWindowCounter(ctx context.Context, currentKey string, previousKey string, ttlSec int) (SlidingWindowCounterResult, error)
 }
 
 type Limiter interface {

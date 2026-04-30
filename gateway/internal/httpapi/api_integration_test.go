@@ -302,3 +302,108 @@ func TestSlidingLogPolicyAndSimulateProgression(t *testing.T) {
 		t.Fatalf("expected sliding_log algorithm in all simulate responses")
 	}
 }
+
+func TestSlidingWindowCounterPolicyAndSimulateContract(t *testing.T) {
+	pm := newFakePolicyManager()
+	now := time.Now().UTC()
+	reason := "rate_limit_exceeded"
+	retry := 300
+	one := 1
+	zero := 0
+	stateAllow := map[string]any{
+		"count":                  1.2,
+		"window_start_ms":        float64(1700000000000),
+		"window_size_sec":        float64(10),
+		"state_schema_version":   float64(1),
+		"current_window_count":   float64(1),
+		"previous_window_count":  float64(1),
+		"previous_window_weight": 0.2,
+		"estimated_count":        1.2,
+	}
+	stateReject := map[string]any{
+		"count":                  3.8,
+		"window_start_ms":        float64(1700000000000),
+		"window_size_sec":        float64(10),
+		"state_schema_version":   float64(1),
+		"current_window_count":   float64(2),
+		"previous_window_count":  float64(2),
+		"previous_window_weight": 0.9,
+		"estimated_count":        3.8,
+	}
+
+	sim := &scriptedSimulator{
+		responses: []simulate.Response{
+			{
+				RequestID:      "req-swc-allow",
+				TS:             now,
+				PolicyID:       "pid-swc-1",
+				Algorithm:      "sliding_window_counter",
+				Allowed:        true,
+				LatencyMS:      1,
+				Remaining:      &one,
+				AlgorithmState: stateAllow,
+			},
+			{
+				RequestID:      "req-swc-blocked",
+				TS:             now.Add(20 * time.Millisecond),
+				PolicyID:       "pid-swc-1",
+				Algorithm:      "sliding_window_counter",
+				Allowed:        false,
+				LatencyMS:      1,
+				Reason:         &reason,
+				RetryAfterMS:   &retry,
+				Remaining:      &zero,
+				AlgorithmState: stateReject,
+			},
+		},
+	}
+	h := newTestServer(sim, pm)
+
+	create := httptest.NewRequest(http.MethodPost, "/api/policies", bytes.NewBufferString(`{"name":"swc-p1","algorithm":"sliding_window_counter","params_json":{"window_size_sec":10,"limit":2},"enabled":true}`))
+	create.Header.Set("Content-Type", "application/json")
+	createRes := httptest.NewRecorder()
+	h.ServeHTTP(createRes, create)
+	if createRes.Code != http.StatusCreated {
+		t.Fatalf("create expected 201 got %d", createRes.Code)
+	}
+
+	activateReq := httptest.NewRequest(http.MethodPost, "/api/policies/00000000-0000-0000-0000-000000000002/activate", nil)
+	activateRes := httptest.NewRecorder()
+	h.ServeHTTP(activateRes, activateReq)
+	if activateRes.Code != http.StatusOK {
+		t.Fatalf("activate expected 200 got %d", activateRes.Code)
+	}
+
+	req1 := httptest.NewRequest(http.MethodPost, "/api/simulate/request", bytes.NewBufferString(`{"client_id":"client-swc"}`))
+	req1.Header.Set("Content-Type", "application/json")
+	res1 := httptest.NewRecorder()
+	h.ServeHTTP(res1, req1)
+	if res1.Code != http.StatusOK {
+		t.Fatalf("simulate #1 expected 200 got %d", res1.Code)
+	}
+
+	var payload1 map[string]any
+	if err := json.Unmarshal(res1.Body.Bytes(), &payload1); err != nil {
+		t.Fatalf("simulate #1 payload parse failed: %v", err)
+	}
+	if payload1["algorithm"] != "sliding_window_counter" {
+		t.Fatalf("simulate #1 expected sliding_window_counter algorithm")
+	}
+	state1, ok := payload1["algorithm_state"].(map[string]any)
+	if !ok {
+		t.Fatalf("simulate #1 expected algorithm_state object")
+	}
+	for _, field := range []string{"count", "window_start_ms", "window_size_sec", "state_schema_version", "current_window_count", "previous_window_count", "previous_window_weight", "estimated_count"} {
+		if _, exists := state1[field]; !exists {
+			t.Fatalf("simulate #1 missing algorithm_state field: %s", field)
+		}
+	}
+
+	req2 := httptest.NewRequest(http.MethodPost, "/api/simulate/request", bytes.NewBufferString(`{"client_id":"client-swc"}`))
+	req2.Header.Set("Content-Type", "application/json")
+	res2 := httptest.NewRecorder()
+	h.ServeHTTP(res2, req2)
+	if res2.Code != http.StatusTooManyRequests {
+		t.Fatalf("simulate #2 expected 429 got %d", res2.Code)
+	}
+}

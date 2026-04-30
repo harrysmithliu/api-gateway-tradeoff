@@ -9,6 +9,10 @@ vi.mock("./pages/SlidingLogDashboard", () => ({
   SlidingLogDashboard: () => <div>Sliding Log Page</div>,
 }));
 
+vi.mock("./pages/SlidingWindowCounterDashboard", () => ({
+  SlidingWindowCounterDashboard: () => <div>Sliding Window Counter Page</div>,
+}));
+
 vi.mock("./pages/ComingSoonAlgorithmPage", () => ({
   ComingSoonAlgorithmPage: ({ title }: { title: string }) => <div>{title} Reserved Page</div>,
 }));
@@ -29,6 +33,17 @@ describe("App routing tabs", () => {
     fireEvent.click(screen.getByRole("link", { name: "Sliding Log" }));
     expect(screen.getByText("Sliding Log Page")).toBeInTheDocument();
     expect(window.location.pathname).toBe("/sliding-log");
+  });
+
+  it("enables sliding-window-counter tab without reserved suffix", () => {
+    render(<App />);
+
+    expect(screen.getByRole("link", { name: "Sliding Window Counter" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Sliding Window Counter (Reserved)" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "Sliding Window Counter" }));
+    expect(screen.getByText("Sliding Window Counter Page")).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/sliding-window-counter");
   });
 
   it("keeps reserved tabs non-navigable", () => {

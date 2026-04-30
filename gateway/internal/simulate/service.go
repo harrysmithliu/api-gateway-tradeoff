@@ -100,3 +100,14 @@ func (a *storeAdapter) EvalSlidingLog(ctx context.Context, key string, nowMS int
 		WindowSizeSec: res.WindowSize,
 	}, nil
 }
+
+func (a *storeAdapter) EvalSlidingWindowCounter(ctx context.Context, currentKey string, previousKey string, ttlSec int) (limiter.SlidingWindowCounterResult, error) {
+	res, err := a.store.EvalSlidingWindowCounter(ctx, currentKey, previousKey, ttlSec)
+	if err != nil {
+		return limiter.SlidingWindowCounterResult{}, err
+	}
+	return limiter.SlidingWindowCounterResult{
+		CurrentWindowCount:  res.CurrentWindowCount,
+		PreviousWindowCount: res.PreviousWindowCount,
+	}, nil
+}

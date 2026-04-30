@@ -8,6 +8,12 @@ func TestValidateAlgorithmForCurrentPhaseAcceptsSlidingLog(t *testing.T) {
 	}
 }
 
+func TestValidateAlgorithmForCurrentPhaseAcceptsSlidingWindowCounter(t *testing.T) {
+	if err := validateAlgorithmForCurrentPhase("sliding_window_counter"); err != nil {
+		t.Fatalf("expected sliding_window_counter to be accepted, got error: %v", err)
+	}
+}
+
 func TestValidateAlgorithmForCurrentPhaseRejectsFutureAlgorithm(t *testing.T) {
 	if err := validateAlgorithmForCurrentPhase("token_bucket"); err != ErrUnsupportedInCurrentPhase {
 		t.Fatalf("expected ErrUnsupportedInCurrentPhase, got: %v", err)
@@ -33,5 +39,18 @@ func TestValidateParamsRejectsSlidingLogMissingLimit(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected error for missing limit")
+	}
+}
+
+func TestValidateParamsAcceptsSlidingWindowCounterSchema(t *testing.T) {
+	params, err := validateParams("sliding_window_counter", map[string]any{
+		"window_size_sec": 30,
+		"limit":           20,
+	})
+	if err != nil {
+		t.Fatalf("expected valid swc params, got error: %v", err)
+	}
+	if params["window_size_sec"] != 30 || params["limit"] != 20 {
+		t.Fatalf("unexpected swc normalized params: %+v", params)
 	}
 }
