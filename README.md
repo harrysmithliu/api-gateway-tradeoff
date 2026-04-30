@@ -148,3 +148,7 @@ The screenshot below shows the multi-tab console layout with algorithm slots, in
 The screenshot below shows the reserved Sliding Window Counter tab context in the current console workflow.
 
 ![Sliding Window Counter Reserved Tab](docs/screenshots/4.png)
+
+The screenshot below shows the reserved Token Bucket tab context for the next milestone workflow.
+
+![Token Bucket Reserved Tab](docs/screenshots/5.png)

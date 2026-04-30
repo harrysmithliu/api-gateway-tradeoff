@@ -15,7 +15,7 @@ func BuildLimiter(algorithm string, store RuntimeCounter) (Limiter, error) {
 	case "token_bucket":
 		return NewTokenBucketLimiter(store), nil
 	case "leaky_bucket":
-		return nil, fmt.Errorf("algorithm '%s' is not implemented in current milestone", algorithm)
+		return NewLeakyBucketLimiter(store), nil
 	default:
 		return nil, fmt.Errorf("unsupported algorithm '%s'", algorithm)
 	}

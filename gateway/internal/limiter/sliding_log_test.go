@@ -73,6 +73,10 @@ func (f *fakeSlidingLogStore) EvalTokenBucket(ctx context.Context, key string, n
 	return TokenBucketResult{}, nil
 }
 
+func (f *fakeSlidingLogStore) EvalLeakyBucket(ctx context.Context, key string, nowMS int64, capacity int, leakRatePerSec float64, waterPerRequest int, ttlSec int) (LeakyBucketResult, error) {
+	return LeakyBucketResult{}, nil
+}
+
 func TestSlidingLogAllowsUnderLimit(t *testing.T) {
 	store := newFakeSlidingLogStore()
 	lim := NewSlidingLogLimiter(store)

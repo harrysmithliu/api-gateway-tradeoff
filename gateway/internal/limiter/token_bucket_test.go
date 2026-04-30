@@ -77,6 +77,10 @@ func (f *fakeTokenBucketStore) EvalTokenBucket(ctx context.Context, key string, 
 	}, nil
 }
 
+func (f *fakeTokenBucketStore) EvalLeakyBucket(ctx context.Context, key string, nowMS int64, capacity int, leakRatePerSec float64, waterPerRequest int, ttlSec int) (LeakyBucketResult, error) {
+	return LeakyBucketResult{}, nil
+}
+
 func TestTokenBucketAllowsAndConsumesTokens(t *testing.T) {
 	store := newFakeTokenBucketStore()
 	lim := NewTokenBucketLimiter(store)

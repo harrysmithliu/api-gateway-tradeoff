@@ -20,8 +20,14 @@ func TestValidateAlgorithmForCurrentPhaseAcceptsTokenBucket(t *testing.T) {
 	}
 }
 
-func TestValidateAlgorithmForCurrentPhaseRejectsFutureAlgorithm(t *testing.T) {
-	if err := validateAlgorithmForCurrentPhase("leaky_bucket"); err != ErrUnsupportedInCurrentPhase {
+func TestValidateAlgorithmForCurrentPhaseAcceptsLeakyBucket(t *testing.T) {
+	if err := validateAlgorithmForCurrentPhase("leaky_bucket"); err != nil {
+		t.Fatalf("expected leaky_bucket to be accepted, got error: %v", err)
+	}
+}
+
+func TestValidateAlgorithmForCurrentPhaseRejectsUnknownAlgorithm(t *testing.T) {
+	if err := validateAlgorithmForCurrentPhase("future_algorithm"); err != ErrUnsupportedInCurrentPhase {
 		t.Fatalf("expected ErrUnsupportedInCurrentPhase, got: %v", err)
 	}
 }
@@ -85,5 +91,32 @@ func TestValidateParamsTokenBucketDefaultsTokensPerRequest(t *testing.T) {
 	}
 	if params["tokens_per_request"] != 1 {
 		t.Fatalf("expected default tokens_per_request=1, got %+v", params["tokens_per_request"])
+	}
+}
+
+func TestValidateParamsAcceptsLeakyBucketSchema(t *testing.T) {
+	params, err := validateParams("leaky_bucket", map[string]any{
+		"capacity":          20,
+		"leak_rate_per_sec": 3.5,
+		"water_per_request": 2,
+	})
+	if err != nil {
+		t.Fatalf("expected valid leaky bucket params, got error: %v", err)
+	}
+	if params["capacity"] != 20 || params["leak_rate_per_sec"] != 3.5 || params["water_per_request"] != 2 {
+		t.Fatalf("unexpected leaky bucket normalized params: %+v", params)
+	}
+}
+
+func TestValidateParamsLeakyBucketDefaultsWaterPerRequest(t *testing.T) {
+	params, err := validateParams("leaky_bucket", map[string]any{
+		"capacity":          20,
+		"leak_rate_per_sec": 3.5,
+	})
+	if err != nil {
+		t.Fatalf("expected valid leaky bucket params, got error: %v", err)
+	}
+	if params["water_per_request"] != 1 {
+		t.Fatalf("expected default water_per_request=1, got %+v", params["water_per_request"])
 	}
 }

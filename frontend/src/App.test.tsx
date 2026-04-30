@@ -17,8 +17,8 @@ vi.mock("./pages/TokenBucketDashboard", () => ({
   TokenBucketDashboard: () => <div>Token Bucket Page</div>,
 }));
 
-vi.mock("./pages/ComingSoonAlgorithmPage", () => ({
-  ComingSoonAlgorithmPage: ({ title }: { title: string }) => <div>{title} Reserved Page</div>,
+vi.mock("./pages/LeakyBucketDashboard", () => ({
+  LeakyBucketDashboard: () => <div>Leaky Bucket Page</div>,
 }));
 
 import App from "./App";
@@ -61,11 +61,14 @@ describe("App routing tabs", () => {
     expect(window.location.pathname).toBe("/token-bucket");
   });
 
-  it("keeps reserved tabs non-navigable", () => {
+  it("enables leaky-bucket tab without reserved suffix", () => {
     render(<App />);
 
-    fireEvent.click(screen.getByRole("link", { name: "Leaky Bucket (Reserved)" }));
-    expect(screen.getByText("Fixed Window Page")).toBeInTheDocument();
-    expect(window.location.pathname).toBe("/fixed-window");
+    expect(screen.getByRole("link", { name: "Leaky Bucket" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Leaky Bucket (Reserved)" })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("link", { name: "Leaky Bucket" }));
+    expect(screen.getByText("Leaky Bucket Page")).toBeInTheDocument();
+    expect(window.location.pathname).toBe("/leaky-bucket");
   });
 });

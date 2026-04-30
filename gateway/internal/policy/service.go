@@ -235,7 +235,7 @@ func validateAlgorithmForCurrentPhase(algorithm string) error {
 		return ErrInvalidInput
 	}
 	switch algorithm {
-	case "fixed_window", "sliding_log", "sliding_window_counter", "token_bucket":
+	case "fixed_window", "sliding_log", "sliding_window_counter", "token_bucket", "leaky_bucket":
 		return nil
 	default:
 		return ErrUnsupportedInCurrentPhase
@@ -248,6 +248,8 @@ func validateParams(algorithm string, params map[string]any) (map[string]any, er
 		return validateWindowAndLimit(params)
 	case "token_bucket":
 		return validateTokenBucketParams(params)
+	case "leaky_bucket":
+		return validateLeakyBucketParams(params)
 	default:
 		return nil, ErrUnsupportedInCurrentPhase
 	}
@@ -287,6 +289,31 @@ func validateTokenBucketParams(params map[string]any) (map[string]any, error) {
 		"capacity":            capacity,
 		"refill_rate_per_sec": refillRate,
 		"tokens_per_request":  tokensPerRequest,
+	}, nil
+}
+
+func validateLeakyBucketParams(params map[string]any) (map[string]any, error) {
+	capacity, ok := toPositiveInt(params["capacity"])
+	if !ok {
+		return nil, fmt.Errorf("%w: capacity must be > 0", ErrInvalidInput)
+	}
+	leakRate, ok := toPositiveFloat(params["leak_rate_per_sec"])
+	if !ok {
+		return nil, fmt.Errorf("%w: leak_rate_per_sec must be > 0", ErrInvalidInput)
+	}
+	waterPerRequest := 1
+	if raw, exists := params["water_per_request"]; exists {
+		value, valid := toPositiveInt(raw)
+		if !valid {
+			return nil, fmt.Errorf("%w: water_per_request must be > 0", ErrInvalidInput)
+		}
+		waterPerRequest = value
+	}
+
+	return map[string]any{
+		"capacity":          capacity,
+		"leak_rate_per_sec": leakRate,
+		"water_per_request": waterPerRequest,
 	}, nil
 }
 

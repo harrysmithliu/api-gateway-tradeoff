@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { FixedWindowDashboard } from "./pages/FixedWindowDashboard";
+import { LeakyBucketDashboard } from "./pages/LeakyBucketDashboard";
 import { SlidingLogDashboard } from "./pages/SlidingLogDashboard";
 import { SlidingWindowCounterDashboard } from "./pages/SlidingWindowCounterDashboard";
 import { TokenBucketDashboard } from "./pages/TokenBucketDashboard";
-import { ComingSoonAlgorithmPage } from "./pages/ComingSoonAlgorithmPage";
 
 type RouteConfig = {
   path: string;
@@ -41,8 +41,8 @@ const ROUTES: RouteConfig[] = [
   {
     path: "/leaky-bucket",
     label: "Leaky Bucket",
-    enabled: false,
-    render: () => <ComingSoonAlgorithmPage title="Leaky Bucket" />,
+    enabled: true,
+    render: () => <LeakyBucketDashboard />,
   },
 ];
 

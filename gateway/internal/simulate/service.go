@@ -124,3 +124,16 @@ func (a *storeAdapter) EvalTokenBucket(ctx context.Context, key string, nowMS in
 		RetryAfterMS: res.RetryAfterMS,
 	}, nil
 }
+
+func (a *storeAdapter) EvalLeakyBucket(ctx context.Context, key string, nowMS int64, capacity int, leakRatePerSec float64, waterPerRequest int, ttlSec int) (limiter.LeakyBucketResult, error) {
+	res, err := a.store.EvalLeakyBucket(ctx, key, nowMS, capacity, leakRatePerSec, waterPerRequest, ttlSec)
+	if err != nil {
+		return limiter.LeakyBucketResult{}, err
+	}
+	return limiter.LeakyBucketResult{
+		Allowed:      res.Allowed,
+		WaterLevel:   res.WaterLevel,
+		LastLeakMS:   res.LastLeakMS,
+		RetryAfterMS: res.RetryAfterMS,
+	}, nil
+}

@@ -113,6 +113,55 @@ redis.call("EXPIRE", key, ttl_sec)
 return {allowed, tokens, now_ms, retry_after_ms}
 `)
 
+var leakyBucketScript = redis.NewScript(`
+local key = KEYS[1]
+local now_ms = tonumber(ARGV[1])
+local capacity = tonumber(ARGV[2])
+local leak_rate_per_sec = tonumber(ARGV[3])
+local water_per_request = tonumber(ARGV[4])
+local ttl_sec = tonumber(ARGV[5])
+
+local fields = redis.call("HMGET", key, "water_level", "last_leak_ms")
+local water_level = tonumber(fields[1])
+local last_leak_ms = tonumber(fields[2])
+
+if water_level == nil then
+  water_level = 0
+end
+if last_leak_ms == nil then
+  last_leak_ms = now_ms
+end
+
+local elapsed_ms = now_ms - last_leak_ms
+if elapsed_ms < 0 then
+  elapsed_ms = 0
+end
+
+water_level = water_level - ((elapsed_ms / 1000.0) * leak_rate_per_sec)
+if water_level < 0 then
+  water_level = 0
+end
+
+local allowed = 0
+local retry_after_ms = 0
+
+if water_level + water_per_request <= capacity then
+  allowed = 1
+  water_level = water_level + water_per_request
+else
+  local overflow = (water_level + water_per_request) - capacity
+  retry_after_ms = math.ceil((overflow / leak_rate_per_sec) * 1000)
+  if retry_after_ms < 1 then
+    retry_after_ms = 1
+  end
+end
+
+redis.call("HSET", key, "water_level", water_level, "last_leak_ms", now_ms)
+redis.call("EXPIRE", key, ttl_sec)
+
+return {allowed, water_level, now_ms, retry_after_ms}
+`)
+
 func NewRedisStore(redisURL string) (*RedisStore, error) {
 	opts, err := redis.ParseURL(redisURL)
 	if err != nil {
@@ -246,6 +295,46 @@ func (s *RedisStore) EvalTokenBucket(ctx context.Context, key string, nowMS int6
 		Allowed:      allowedInt == 1,
 		Tokens:       tokens,
 		LastRefillMS: lastRefillMS,
+		RetryAfterMS: int(retryAfterMS),
+	}, nil
+}
+
+func (s *RedisStore) EvalLeakyBucket(ctx context.Context, key string, nowMS int64, capacity int, leakRatePerSec float64, waterPerRequest int, ttlSec int) (LeakyBucketEvalResult, error) {
+	if capacity <= 0 || leakRatePerSec <= 0 || waterPerRequest <= 0 || ttlSec <= 0 {
+		return LeakyBucketEvalResult{}, fmt.Errorf("invalid leaky bucket args")
+	}
+
+	raw, err := leakyBucketScript.Run(ctx, s.client, []string{key}, nowMS, capacity, leakRatePerSec, waterPerRequest, ttlSec).Result()
+	if err != nil {
+		return LeakyBucketEvalResult{}, err
+	}
+
+	values, ok := raw.([]any)
+	if !ok || len(values) != 4 {
+		return LeakyBucketEvalResult{}, fmt.Errorf("unexpected leaky bucket script response format")
+	}
+
+	allowedInt, err := asInt64(values[0])
+	if err != nil {
+		return LeakyBucketEvalResult{}, fmt.Errorf("parse allowed: %w", err)
+	}
+	waterLevel, err := asFloat64(values[1])
+	if err != nil {
+		return LeakyBucketEvalResult{}, fmt.Errorf("parse water_level: %w", err)
+	}
+	lastLeakMS, err := asInt64(values[2])
+	if err != nil {
+		return LeakyBucketEvalResult{}, fmt.Errorf("parse last_leak_ms: %w", err)
+	}
+	retryAfterMS, err := asInt64(values[3])
+	if err != nil {
+		return LeakyBucketEvalResult{}, fmt.Errorf("parse retry_after_ms: %w", err)
+	}
+
+	return LeakyBucketEvalResult{
+		Allowed:      allowedInt == 1,
+		WaterLevel:   waterLevel,
+		LastLeakMS:   lastLeakMS,
 		RetryAfterMS: int(retryAfterMS),
 	}, nil
 }

@@ -36,6 +36,10 @@ func (f *fakeStore) EvalTokenBucket(ctx context.Context, key string, nowMS int64
 	return TokenBucketResult{}, nil
 }
 
+func (f *fakeStore) EvalLeakyBucket(ctx context.Context, key string, nowMS int64, capacity int, leakRatePerSec float64, waterPerRequest int, ttlSec int) (LeakyBucketResult, error) {
+	return LeakyBucketResult{}, nil
+}
+
 func TestFixedWindowAllowsUnderLimit(t *testing.T) {
 	store := newFakeStore()
 	lim := NewFixedWindowLimiter(store)
