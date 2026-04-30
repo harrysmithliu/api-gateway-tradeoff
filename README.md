@@ -61,49 +61,49 @@ Services:
 - Backend API: http://localhost:8000
 - Backend health: http://localhost:8000/api/health
 
-## Frontend Dashboard Guide
+## Fixed Window Frontend Mode
 
-The dashboard is a single-page control panel with five sections:
+The current frontend is a dedicated `Fixed Window` visualization page based on `doc/FRONTEND_FIXED_WINDOW_VISUALIZATION_SPEC.md`.
 
-- Policy Control
-- Request Simulation
+Page sections:
+
+- Simulation Controls
 - Realtime KPI Cards
-- Single-Panel Comparison Chart
-- Logs Table
+- Window Occupancy Chart
+- Request Outcome Timeline
+- Request Log Table
+- Diagnostics
 
-### Policy Workflow
+### Simulation Controls
 
-1. Select an existing policy from the `Policy` dropdown, or click `New Draft`.
-2. Update algorithm parameters in the dynamic form.
-3. Click `Save Policy` to create/update policy data in PostgreSQL.
-4. Click `Activate Policy` to switch active limiter policy at runtime.
+Inputs:
 
-### Runtime State Reset Button Status
+- `Limit`
+- `Window Size (sec)`
+- `RPS`
+- `Duration (sec)`
+- `Concurrency`
+- `Client ID mode` (`single` / `rotating`)
 
-The UI supports `Activate + Reset Runtime State`.  
-When clicked, frontend calls policy activation with `reset_runtime_state=true` so backend can switch policy and reset runtime limiter state in one action.
+Actions:
 
-### Simulation Workflow
+- `Start`
+- `Pause` / `Resume`
+- `Stop`
+- `Reset View`
 
-The simulation panel supports two execution modes:
+`Reset View` clears frontend chart/log buffers only.
 
-- `Frontend Request Loop`: the browser sends request traffic with configurable rounds and concurrency.
-- `Backend Burst API`: backend executes one burst through `/api/simulate/burst`.
+### Real-Time Visualization Behavior
 
-Each simulation automatically:
-
-- creates a run via `/api/runs`
-- attaches simulation requests to that run
-- finalizes the run via `/api/runs/{id}/complete`
-
-You can switch metrics and logs between:
-
-- `Global` scope
-- `Current Run` scope
+- Dispatches requests through `POST /api/simulate/request`.
+- Consumes per-request `algorithm_state` for count/window rendering.
+- Highlights reject moments in chart and timeline.
+- Keeps an in-memory rolling buffer with max 2000 events.
 
 ## Frontend Validation Checklist
 
-Run these commands from `frontend/`:
+Run from `frontend/`:
 
 ```bash
 npm install
@@ -111,42 +111,21 @@ npm run build
 npm test
 ```
 
-Expected results:
+Expected:
 
-- Build succeeds (`vite build` completes).
-- Sanity tests pass (currently `3` tests in `Dashboard.sanity.test.tsx`).
+- Build succeeds.
+- All sanity tests pass.
 
-Sanity coverage:
+Current sanity test files:
 
-- Policy changes update parameter form fields correctly.
-- Simulation updates logs and chart data.
-- KPI cards render reject rate and P50/P95/P99 correctly.
+- `src/components/fixed-window/SimulationControls.test.tsx`
+- `src/components/fixed-window/RequestLogTable.test.tsx`
+- `src/hooks/useFixedWindowSimulation.test.tsx`
 
-## Demo Walkthrough (Frontend + API)
+## Quick Demo Walkthrough (Fixed Window)
 
-1. Start all services with Docker Compose.
-2. Open the dashboard at `http://localhost:5173`.
-3. Activate a strict `Fixed Window` policy and run simulation.
-4. Observe higher reject rate and log entries with rejection reasons.
-5. Switch to `Token Bucket` under similar load and rerun.
-6. Compare QPS, reject rate, and P99 on the single-panel chart.
-
-## Dashboard Screenshots
-
-### 1) Policy Control and Simulation Setup
-
-This view shows the policy selector, parameter editor, and simulation controls used to configure rounds, request volume, and concurrency before running a test.
-
-![Policy Control and Simulation Setup](doc/screenshots/1.png)
-
-### 2) Realtime KPI and Chart Comparison
-
-This view highlights live KPI cards and the single-panel comparison chart for QPS, reject rate, and latency percentile trends (including P99).
-
-![Realtime KPI and Chart Comparison](doc/screenshots/2.png)
-
-### 3) Request Logs and Runtime Behavior
-
-This view focuses on request-level logs, including allow/reject outcomes, reasons, retry hints, and latency details for troubleshooting limiter behavior.
-
-![Request Logs and Runtime Behavior](doc/screenshots/3.png)
+1. Start the stack with Docker Compose.
+2. Open `http://localhost:5173`.
+3. Set `limit=10`, `window=10`, `rps=20`, and run simulation.
+4. Observe count reaching limit, rejects clustering in-window, and reset behavior at window boundaries.
+5. Toggle `Rejected only` in the table and inspect `retry_after_ms` values.

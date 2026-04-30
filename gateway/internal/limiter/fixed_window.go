@@ -48,6 +48,7 @@ func (l *FixedWindowLimiter) Allow(ctx context.Context, policyID, clientID strin
 			AlgorithmState: map[string]any{
 				"count":           count,
 				"window_start_ms": windowStartMS,
+				"window_size_sec": windowSizeSec,
 			},
 		}, nil
 	}
@@ -66,6 +67,7 @@ func (l *FixedWindowLimiter) Allow(ctx context.Context, policyID, clientID strin
 		AlgorithmState: map[string]any{
 			"count":           count,
 			"window_start_ms": windowStartMS,
+			"window_size_sec": windowSizeSec,
 		},
 	}, nil
 }

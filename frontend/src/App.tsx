@@ -1,7 +1,7 @@
-import { Dashboard } from "./pages/Dashboard";
+import { FixedWindowDashboard } from "./pages/FixedWindowDashboard";
 
 function App() {
-  return <Dashboard />;
+  return <FixedWindowDashboard />;
 }
 
 export default App;

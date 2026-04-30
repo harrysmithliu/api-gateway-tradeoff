@@ -39,6 +39,9 @@ frontend/dist/
 frontend/.vite/
 frontend/.cache/
 frontend/.eslintcache
+*.tsbuildinfo
+frontend/vite.config.js
+frontend/vite.config.d.ts
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
