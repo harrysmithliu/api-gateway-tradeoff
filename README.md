@@ -39,7 +39,8 @@ infra/       Docker Compose and infrastructure wiring
 
 ## Implementation Contract
 
-The implementation details, API contracts, data model, milestone criteria, and delivery checklist are defined in `IMPLEMENTATION_BLUEPRINT.md`.
+- Historical full-stack blueprint: `docs/IMPLEMENTATION_BLUEPRINT.md`
+- Active backend-first incremental requirements: `docs/REQUIREMENTS_BACKEND_INCREMENTAL.md`
 
 ## Local Development with Docker
 
@@ -63,7 +64,7 @@ Services:
 
 ## Fixed Window Frontend Mode
 
-The current frontend is a dedicated `Fixed Window` visualization page based on `doc/FRONTEND_FIXED_WINDOW_VISUALIZATION_SPEC.md`.
+The current frontend is a dedicated `Fixed Window` visualization page based on `docs/FRONTEND_FIXED_WINDOW_VISUALIZATION_SPEC.md`.
 
 Page sections:
 
@@ -129,3 +130,9 @@ Current sanity test files:
 3. Set `limit=10`, `window=10`, `rps=20`, and run simulation.
 4. Observe count reaching limit, rejects clustering in-window, and reset behavior at window boundaries.
 5. Toggle `Rejected only` in the table and inspect `retry_after_ms` values.
+
+## Latest Screenshot
+
+The screenshot below reflects the current Fixed Window simulation controls page used by the frontend mode.
+
+![Fixed Window Simulation Controls](docs/screenshots/1.png)
