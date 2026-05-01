@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  ApiError,
   fetchActiveFixedWindowPolicy,
   simulateFixedWindowRequest,
   syncFixedWindowPolicyConfig,
@@ -17,6 +16,15 @@ import {
   type PolicySyncStatus,
   type SimulationStatus,
 } from "../types/fixedWindow";
+import {
+  createRuntimeControl,
+  createSessionId,
+  resetRuntimeAfterStop,
+  resolveSimulationClientId,
+  runSimulationDispatchLoop,
+} from "./simulationRuntime";
+import { deriveBaseKpiStats } from "./kpiBase";
+import { reloadPolicyFromBackend, syncPolicyBeforeStart } from "./policySyncRuntime";
 
 type SimulationSession = {
   id: string;
@@ -43,13 +51,6 @@ type UseFixedWindowSimulationValue = {
   resetView: () => void;
 };
 
-type RuntimeControl = {
-  stopRequested: boolean;
-  pauseRequested: boolean;
-  dispatchSequence: number;
-  inFlight: Set<Promise<void>>;
-};
-
 const INITIAL_KPI: FixedWindowKpiSnapshot = {
   total: 0,
   allowed: 0,
@@ -64,8 +65,6 @@ const INITIAL_KPI: FixedWindowKpiSnapshot = {
   observedRps: 0,
   lastRetryAfterMs: null,
 };
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 const safeNumber = (value: number, min: number): number => {
   if (!Number.isFinite(value)) {
@@ -85,51 +84,16 @@ const clampConfig = (config: FixedWindowSimulationConfig): FixedWindowSimulation
   rotatingPoolSize: Math.floor(safeNumber(config.rotatingPoolSize, 2)),
 });
 
-const createSessionId = (): string => {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `session-${Date.now()}`;
-};
-
 const deriveKpi = (events: FixedWindowEvent[], limit: number): FixedWindowKpiSnapshot => {
-  const decisionEvents = events.filter((event) => event.kind === "decision" && event.decision !== null);
-  const total = decisionEvents.length;
-  const allowed = decisionEvents.filter((event) => event.decision?.allowed).length;
-  const rejected = total - allowed;
-
-  let latestDecision = null;
-  for (let index = decisionEvents.length - 1; index >= 0; index -= 1) {
-    const current = decisionEvents[index].decision;
-    if (current) {
-      latestDecision = current;
-      break;
-    }
-  }
-
-  let lastRetryAfterMs: number | null = null;
-  for (let index = decisionEvents.length - 1; index >= 0; index -= 1) {
-    const current = decisionEvents[index].decision;
-    if (current && !current.allowed && current.retryAfterMs !== null) {
-      lastRetryAfterMs = current.retryAfterMs;
-      break;
-    }
-  }
-
-  const nowMs = Date.now();
-  const observedRps = decisionEvents.filter((event) => {
-    const tsMs = Date.parse(event.ts);
-    return Number.isFinite(tsMs) && nowMs - tsMs <= 1000;
-  }).length;
-
-  const state = latestDecision?.algorithmState ?? null;
+  const { total, allowed, rejected, allowRate, rejectRate, latestDecision, lastRetryAfterMs, observedRps, state } =
+    deriveBaseKpiStats(events);
 
   return {
     total,
     allowed,
     rejected,
-    allowRate: total > 0 ? allowed / total : 0,
-    rejectRate: total > 0 ? rejected / total : 0,
+    allowRate,
+    rejectRate,
     currentCount: state?.count ?? null,
     currentLimit: limit,
     currentRemaining: latestDecision?.remaining ?? null,
@@ -174,12 +138,7 @@ export const useFixedWindowSimulation = (): UseFixedWindowSimulationValue => {
 
   const mountedRef = useRef(true);
   const statusRef = useRef<SimulationStatus>("idle");
-  const runtimeRef = useRef<RuntimeControl>({
-    stopRequested: false,
-    pauseRequested: false,
-    dispatchSequence: 0,
-    inFlight: new Set(),
-  });
+  const runtimeRef = useRef(createRuntimeControl());
 
   useEffect(() => {
     mountedRef.current = true;
@@ -217,38 +176,23 @@ export const useFixedWindowSimulation = (): UseFixedWindowSimulationValue => {
   }, [appendEvent]);
 
   const reloadActivePolicy = useCallback(async () => {
-    setPolicySyncStatus("loading");
-    try {
-      const backendPolicy = await fetchActiveFixedWindowPolicy();
-      if (!mountedRef.current) {
-        return;
-      }
-
-      if (backendPolicy) {
-        setActivePolicy(backendPolicy);
-        setConfig((previous) =>
-          clampConfig({
-            ...previous,
-            limit: backendPolicy.limit,
-            windowSizeSec: backendPolicy.windowSizeSec,
-          }),
-        );
-        setPolicySyncStatus("ready");
-        setPolicySyncMessage(
-          `Loaded active policy ${backendPolicy.name} (limit=${backendPolicy.limit}, window=${backendPolicy.windowSizeSec}s).`,
-        );
-      } else {
-        setActivePolicy(null);
-        setPolicySyncStatus("ready");
-        setPolicySyncMessage("No active fixed window policy found. Start will create or reuse one.");
-      }
-    } catch (error) {
-      if (!mountedRef.current) {
-        return;
-      }
-      setPolicySyncStatus("error");
-      setPolicySyncMessage(error instanceof Error ? error.message : "Failed to load active policy.");
-    }
+    await reloadPolicyFromBackend({
+      mountedRef,
+      setPolicySyncStatus,
+      setPolicySyncMessage,
+      setActivePolicy,
+      setConfig,
+      fetchActivePolicy: fetchActiveFixedWindowPolicy,
+      applyLoadedPolicyToConfig: (previous, backendPolicy) =>
+        clampConfig({
+          ...previous,
+          limit: backendPolicy.limit,
+          windowSizeSec: backendPolicy.windowSizeSec,
+        }),
+      loadedMessage: (backendPolicy) =>
+        `Loaded active policy ${backendPolicy.name} (limit=${backendPolicy.limit}, window=${backendPolicy.windowSizeSec}s).`,
+      emptyMessage: "No active fixed window policy found. Start will create or reuse one.",
+    });
   }, []);
 
   useEffect(() => {
@@ -256,14 +200,7 @@ export const useFixedWindowSimulation = (): UseFixedWindowSimulationValue => {
   }, [reloadActivePolicy]);
 
   const resolveClientId = useCallback((resolvedConfig: FixedWindowSimulationConfig): string => {
-    const runtime = runtimeRef.current;
-    if (resolvedConfig.clientIdMode === "single") {
-      return resolvedConfig.singleClientId;
-    }
-
-    const poolIndex = runtime.dispatchSequence % resolvedConfig.rotatingPoolSize;
-    runtime.dispatchSequence += 1;
-    return `client-${poolIndex + 1}`;
+    return resolveSimulationClientId(runtimeRef.current, resolvedConfig);
   }, []);
 
   const dispatchRequest = useCallback(
@@ -290,43 +227,31 @@ export const useFixedWindowSimulation = (): UseFixedWindowSimulationValue => {
     setConfig(resolvedConfig);
 
     void (async () => {
-      setPolicySyncStatus("syncing");
-      setPolicySyncMessage("Syncing frontend limit/window to backend policy...");
-      let effectiveConfig = resolvedConfig;
-
-      try {
-        const syncedPolicy = await syncFixedWindowPolicyConfig({
-          limit: resolvedConfig.limit,
-          windowSizeSec: resolvedConfig.windowSizeSec,
-          resetRuntimeState: true,
-        });
-        if (!mountedRef.current) {
-          return;
-        }
-        setActivePolicy(syncedPolicy);
-        effectiveConfig = clampConfig({
-          ...resolvedConfig,
-          limit: syncedPolicy.limit,
-          windowSizeSec: syncedPolicy.windowSizeSec,
-        });
-        setConfig(effectiveConfig);
-        setPolicySyncStatus("ready");
-        setPolicySyncMessage(
+      const effectiveConfig = await syncPolicyBeforeStart({
+        mountedRef,
+        resolvedConfig,
+        setPolicySyncStatus,
+        setPolicySyncMessage,
+        setActivePolicy,
+        setConfig,
+        syncingMessage: "Syncing frontend limit/window to backend policy...",
+        syncPolicy: (currentConfig) =>
+          syncFixedWindowPolicyConfig({
+            limit: currentConfig.limit,
+            windowSizeSec: currentConfig.windowSizeSec,
+            resetRuntimeState: true,
+          }),
+        applySyncedPolicyToConfig: (currentConfig, syncedPolicy) =>
+          clampConfig({
+            ...currentConfig,
+            limit: syncedPolicy.limit,
+            windowSizeSec: syncedPolicy.windowSizeSec,
+          }),
+        syncedMessage: (syncedPolicy) =>
           `Synced and activated policy ${syncedPolicy.name} (limit=${syncedPolicy.limit}, window=${syncedPolicy.windowSizeSec}s).`,
-        );
-      } catch (error) {
-        if (!mountedRef.current) {
-          return;
-        }
-        const message =
-          error instanceof ApiError
-            ? `${error.message} (HTTP ${error.status})`
-            : error instanceof Error
-              ? error.message
-              : "Failed to sync policy.";
-        setPolicySyncStatus("error");
-        setPolicySyncMessage(message);
-        appendSyntheticError(`Policy sync failed: ${message}`);
+        appendSyntheticError,
+      });
+      if (!effectiveConfig) {
         return;
       }
 
@@ -337,60 +262,20 @@ export const useFixedWindowSimulation = (): UseFixedWindowSimulationValue => {
       };
       setSession(nextSession);
 
-      runtimeRef.current.stopRequested = false;
-      runtimeRef.current.pauseRequested = false;
-      runtimeRef.current.dispatchSequence = 0;
-      runtimeRef.current.inFlight.clear();
+      const runtime = runtimeRef.current;
+      runtime.stopRequested = false;
+      runtime.pauseRequested = false;
+      runtime.dispatchSequence = 0;
+      runtime.inFlight.clear();
 
       statusRef.current = "running";
       setStatus("running");
 
-      const simulationDeadline = Date.now() + effectiveConfig.durationSec * 1000;
-
-      let tokenBudget = 0;
-      let lastTickMs = Date.now();
-
-      while (!runtimeRef.current.stopRequested) {
-        const nowMs = Date.now();
-
-        if (nowMs >= simulationDeadline) {
-          break;
-        }
-
-        if (runtimeRef.current.pauseRequested) {
-          await sleep(60);
-          continue;
-        }
-
-        const elapsedMs = nowMs - lastTickMs;
-        lastTickMs = nowMs;
-        tokenBudget += (elapsedMs / 1000) * effectiveConfig.rps;
-        tokenBudget = Math.min(tokenBudget, effectiveConfig.rps * 2);
-
-        let dispatched = false;
-        while (
-          tokenBudget >= 1 &&
-          runtimeRef.current.inFlight.size < effectiveConfig.concurrency &&
-          !runtimeRef.current.stopRequested &&
-          !runtimeRef.current.pauseRequested
-        ) {
-          tokenBudget -= 1;
-          dispatched = true;
-
-          const task = dispatchRequest(effectiveConfig).finally(() => {
-            runtimeRef.current.inFlight.delete(task);
-          });
-          runtimeRef.current.inFlight.add(task);
-        }
-
-        if (!dispatched) {
-          await sleep(12);
-        }
-      }
-
-      if (runtimeRef.current.inFlight.size > 0) {
-        await Promise.allSettled(Array.from(runtimeRef.current.inFlight));
-      }
+      await runSimulationDispatchLoop({
+        runtime,
+        config: effectiveConfig,
+        dispatch: () => dispatchRequest(effectiveConfig),
+      });
 
       if (!mountedRef.current) {
         return;
@@ -406,8 +291,7 @@ export const useFixedWindowSimulation = (): UseFixedWindowSimulationValue => {
             }
           : previous,
       );
-      runtimeRef.current.stopRequested = false;
-      runtimeRef.current.pauseRequested = false;
+      resetRuntimeAfterStop(runtimeRef.current);
     })();
   }, [appendSyntheticError, config, dispatchRequest, policySyncStatus]);
 

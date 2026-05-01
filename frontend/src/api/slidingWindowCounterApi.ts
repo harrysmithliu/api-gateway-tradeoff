@@ -6,99 +6,29 @@ import type {
   SlidingWindowCounterPolicySnapshot,
   SlidingWindowCounterSimulationPayload,
 } from "../types/slidingWindowCounter";
+import {
+  API_BASE_URL,
+  ApiError,
+  activatePolicyRaw,
+  createPolicyRaw,
+  getActivePolicyRaw,
+  isRecord,
+  listPoliciesRaw,
+  postSimulateRequest,
+  SimulateRequestRaw,
+  type PolicyRaw,
+  syncDashboardPolicy,
+  toNumberOrNull,
+  toPositiveIntOrNull,
+  toStringOrNull,
+  updatePolicyRaw,
+} from "./common";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-const REQUEST_TIMEOUT_MS = 10_000;
+export { ApiError } from "./common";
+
 const DASHBOARD_POLICY_NAME = "sliding-window-counter-dashboard";
 
-type SimulateRequestRaw = {
-  request_id?: unknown;
-  ts?: unknown;
-  policy_id?: unknown;
-  algorithm?: unknown;
-  allowed?: unknown;
-  reason?: unknown;
-  retry_after_ms?: unknown;
-  latency_ms?: unknown;
-  remaining?: unknown;
-  client_id?: unknown;
-  run_id?: unknown;
-  algorithm_state?: unknown;
-};
-
-type PolicyRaw = {
-  id?: unknown;
-  name?: unknown;
-  algorithm?: unknown;
-  params_json?: unknown;
-  enabled?: unknown;
-  version?: unknown;
-  description?: unknown;
-  updated_at?: unknown;
-};
-
-type HttpMethod = "GET" | "POST" | "PUT";
-
-export class ApiError extends Error {
-  readonly status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.status = status;
-  }
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
-
-const toStringOrNull = (value: unknown): string | null => (typeof value === "string" ? value : null);
-
-const toNumberOrNull = (value: unknown): number | null => {
-  if (typeof value !== "number" || Number.isNaN(value)) {
-    return null;
-  }
-  return value;
-};
-
-const toPositiveIntOrNull = (value: unknown): number | null => {
-  const numberValue = toNumberOrNull(value);
-  if (numberValue === null || numberValue <= 0) {
-    return null;
-  }
-  return Math.floor(numberValue);
-};
-
 const createIssue = (issue: SlidingWindowCounterIssue): SlidingWindowCounterIssue => issue;
-
-const requestJson = async <T>(
-  path: string,
-  method: HttpMethod = "GET",
-  body?: unknown,
-): Promise<T> => {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-
-  let payload: unknown = null;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = null;
-  }
-
-  if (!response.ok) {
-    const messageFromDetail = isRecord(payload) && typeof payload.detail === "string" ? payload.detail : null;
-    const messageFromError = isRecord(payload) && typeof payload.error === "string" ? payload.error : null;
-    const message = messageFromDetail ?? messageFromError ?? `Request failed with status ${response.status}.`;
-    throw new ApiError(message, response.status);
-  }
-
-  return payload as T;
-};
 
 const mapAlgorithmState = (raw: unknown): { state: SlidingWindowCounterAlgorithmState | null; issues: SlidingWindowCounterIssue[] } => {
   if (!isRecord(raw)) {
@@ -332,31 +262,26 @@ const mapPolicySnapshot = (raw: PolicyRaw): SlidingWindowCounterPolicySnapshot |
 };
 
 const listPolicies = async (): Promise<SlidingWindowCounterPolicySnapshot[]> => {
-  const payload = await requestJson<PolicyRaw[]>("/api/policies");
+  const payload = await listPoliciesRaw();
   return payload.map(mapPolicySnapshot).filter((item): item is SlidingWindowCounterPolicySnapshot => item !== null);
 };
 
 const getActivePolicy = async (): Promise<SlidingWindowCounterPolicySnapshot | null> => {
-  try {
-    const payload = await requestJson<PolicyRaw>("/api/policies/active");
-    return mapPolicySnapshot(payload);
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 404) {
-      return null;
-    }
-    throw error;
+  const payload = await getActivePolicyRaw();
+  if (!payload) {
+    return null;
   }
+  return mapPolicySnapshot(payload);
 };
 
 const createPolicy = async (params: { name: string; limit: number; windowSizeSec: number }): Promise<SlidingWindowCounterPolicySnapshot> => {
-  const payload = await requestJson<PolicyRaw>("/api/policies", "POST", {
+  const payload = await createPolicyRaw({
     name: params.name,
     algorithm: "sliding_window_counter",
-    params_json: {
+    paramsJson: {
       limit: params.limit,
       window_size_sec: params.windowSizeSec,
     },
-    enabled: true,
     description: "Managed by sliding-window-counter dashboard",
   });
 
@@ -368,13 +293,13 @@ const createPolicy = async (params: { name: string; limit: number; windowSizeSec
 };
 
 const updatePolicy = async (policyId: string, params: { limit: number; windowSizeSec: number }): Promise<SlidingWindowCounterPolicySnapshot> => {
-  const payload = await requestJson<PolicyRaw>(`/api/policies/${policyId}`, "PUT", {
+  const payload = await updatePolicyRaw({
+    policyId,
     algorithm: "sliding_window_counter",
-    params_json: {
+    paramsJson: {
       limit: params.limit,
       window_size_sec: params.windowSizeSec,
     },
-    enabled: true,
   });
 
   const mapped = mapPolicySnapshot(payload);
@@ -385,7 +310,7 @@ const updatePolicy = async (policyId: string, params: { limit: number; windowSiz
 };
 
 const activatePolicy = async (policyId: string, resetRuntimeState: boolean): Promise<void> => {
-  await requestJson(`/api/policies/${policyId}/activate?reset_runtime_state=${resetRuntimeState ? "true" : "false"}`, "POST");
+  await activatePolicyRaw(policyId, resetRuntimeState);
 };
 
 export const syncSlidingWindowCounterPolicyConfig = async (params: {
@@ -393,38 +318,24 @@ export const syncSlidingWindowCounterPolicyConfig = async (params: {
   windowSizeSec: number;
   resetRuntimeState: boolean;
 }): Promise<SlidingWindowCounterPolicySnapshot> => {
-  const active = await getActivePolicy();
-
-  let targetPolicy: SlidingWindowCounterPolicySnapshot;
-  if (active && active.enabled) {
-    targetPolicy = await updatePolicy(active.id, {
+  return syncDashboardPolicy({
+    dashboardPolicyName: DASHBOARD_POLICY_NAME,
+    config: {
       limit: params.limit,
       windowSizeSec: params.windowSizeSec,
-    });
-  } else {
-    const candidates = await listPolicies();
-    const existingManaged = candidates.find((item) => item.name === DASHBOARD_POLICY_NAME);
-
-    if (existingManaged) {
-      targetPolicy = await updatePolicy(existingManaged.id, {
-        limit: params.limit,
-        windowSizeSec: params.windowSizeSec,
-      });
-    } else {
-      targetPolicy = await createPolicy({
-        name: DASHBOARD_POLICY_NAME,
-        limit: params.limit,
-        windowSizeSec: params.windowSizeSec,
-      });
-    }
-  }
-
-  await activatePolicy(targetPolicy.id, params.resetRuntimeState);
-  const latest = await getActivePolicy();
-  if (!latest) {
-    throw new ApiError("Failed to read active policy after activation.", 500);
-  }
-  return latest;
+    },
+    resetRuntimeState: params.resetRuntimeState,
+    getActivePolicy,
+    listPolicies,
+    updatePolicy,
+    createPolicy: (name, config) =>
+      createPolicy({
+        name,
+        limit: config.limit,
+        windowSizeSec: config.windowSizeSec,
+      }),
+    activatePolicy,
+  });
 };
 
 export const fetchActiveSlidingWindowCounterPolicy = async (): Promise<SlidingWindowCounterPolicySnapshot | null> => getActivePolicy();
@@ -432,61 +343,36 @@ export const fetchActiveSlidingWindowCounterPolicy = async (): Promise<SlidingWi
 export const simulateSlidingWindowCounterRequest = async (
   payload: SlidingWindowCounterSimulationPayload,
 ): Promise<SlidingWindowCounterApiResult> => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/simulate/request`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        client_id: payload.clientId,
-        run_id: payload.runId,
-      }),
-      signal: controller.signal,
-    });
-
-    let responseBody: unknown = null;
-    try {
-      responseBody = await response.json();
-    } catch {
-      return createSyntheticErrorResult("Backend returned a non-JSON response.");
-    }
-
-    const mapped = mapDecision(responseBody, payload.clientId);
-
-    if (!response.ok && response.status !== 429) {
-      const errorMessage = mapped.issues[0]?.message ?? `Request failed with status ${response.status}.`;
-      return createSyntheticErrorResult(errorMessage);
-    }
-
-    if (!mapped.decision) {
-      const errorMessage = mapped.issues[0]?.message ?? "Unable to parse decision response.";
-      return createSyntheticErrorResult(errorMessage);
-    }
-
-    return {
-      event: {
-        id: mapped.decision.requestId,
-        ts: mapped.decision.ts,
-        kind: "decision",
-        decision: mapped.decision,
-        issues: mapped.issues,
-      },
-    };
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      return createSyntheticErrorResult("Request timeout while calling simulate endpoint.");
-    }
-    if (error instanceof Error) {
-      return createSyntheticErrorResult(`Request error: ${error.message}`);
-    }
-    return createSyntheticErrorResult("Unknown request error.");
-  } finally {
-    clearTimeout(timeout);
+  const call = await postSimulateRequest({ clientId: payload.clientId, runId: payload.runId });
+  if (call.kind === "non_json") {
+    return createSyntheticErrorResult("Backend returned a non-JSON response.");
   }
+  if (call.kind === "timeout") {
+    return createSyntheticErrorResult("Request timeout while calling simulate endpoint.");
+  }
+  if (call.kind === "network_error") {
+    return createSyntheticErrorResult(`Request error: ${call.message}`);
+  }
+
+  const mapped = mapDecision(call.result.body, payload.clientId);
+  if (!call.result.ok && call.result.status !== 429) {
+    const errorMessage = mapped.issues[0]?.message ?? `Request failed with status ${call.result.status}.`;
+    return createSyntheticErrorResult(errorMessage);
+  }
+  if (!mapped.decision) {
+    const errorMessage = mapped.issues[0]?.message ?? "Unable to parse decision response.";
+    return createSyntheticErrorResult(errorMessage);
+  }
+
+  return {
+    event: {
+      id: mapped.decision.requestId,
+      ts: mapped.decision.ts,
+      kind: "decision",
+      decision: mapped.decision,
+      issues: mapped.issues,
+    },
+  };
 };
 
 export const getFrontendApiBaseUrl = (): string => API_BASE_URL;

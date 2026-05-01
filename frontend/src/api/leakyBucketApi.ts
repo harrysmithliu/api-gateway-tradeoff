@@ -6,107 +6,30 @@ import type {
   LeakyBucketPolicySnapshot,
   LeakyBucketSimulationPayload,
 } from "../types/leakyBucket";
+import {
+  API_BASE_URL,
+  ApiError,
+  activatePolicyRaw,
+  createPolicyRaw,
+  getActivePolicyRaw,
+  isRecord,
+  listPoliciesRaw,
+  postSimulateRequest,
+  SimulateRequestRaw,
+  type PolicyRaw,
+  syncDashboardPolicy,
+  toNumberOrNull,
+  toPositiveFloatOrNull,
+  toPositiveIntOrNull,
+  toStringOrNull,
+  updatePolicyRaw,
+} from "./common";
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-const REQUEST_TIMEOUT_MS = 10_000;
+export { ApiError } from "./common";
+
 const DASHBOARD_POLICY_NAME = "leaky-bucket-dashboard";
 
-type SimulateRequestRaw = {
-  request_id?: unknown;
-  ts?: unknown;
-  policy_id?: unknown;
-  algorithm?: unknown;
-  allowed?: unknown;
-  reason?: unknown;
-  retry_after_ms?: unknown;
-  latency_ms?: unknown;
-  remaining?: unknown;
-  client_id?: unknown;
-  run_id?: unknown;
-  algorithm_state?: unknown;
-};
-
-type PolicyRaw = {
-  id?: unknown;
-  name?: unknown;
-  algorithm?: unknown;
-  params_json?: unknown;
-  enabled?: unknown;
-  version?: unknown;
-  description?: unknown;
-  updated_at?: unknown;
-};
-
-type HttpMethod = "GET" | "POST" | "PUT";
-
-export class ApiError extends Error {
-  readonly status: number;
-
-  constructor(message: string, status: number) {
-    super(message);
-    this.status = status;
-  }
-}
-
-const isRecord = (value: unknown): value is Record<string, unknown> =>
-  typeof value === "object" && value !== null;
-
-const toStringOrNull = (value: unknown): string | null => (typeof value === "string" ? value : null);
-
-const toNumberOrNull = (value: unknown): number | null => {
-  if (typeof value !== "number" || Number.isNaN(value)) {
-    return null;
-  }
-  return value;
-};
-
-const toPositiveIntOrNull = (value: unknown): number | null => {
-  const numberValue = toNumberOrNull(value);
-  if (numberValue === null || numberValue <= 0) {
-    return null;
-  }
-  return Math.floor(numberValue);
-};
-
-const toPositiveFloatOrNull = (value: unknown): number | null => {
-  const numberValue = toNumberOrNull(value);
-  if (numberValue === null || numberValue <= 0) {
-    return null;
-  }
-  return numberValue;
-};
-
 const createIssue = (issue: LeakyBucketIssue): LeakyBucketIssue => issue;
-
-const requestJson = async <T>(
-  path: string,
-  method: HttpMethod = "GET",
-  body?: unknown,
-): Promise<T> => {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-
-  let payload: unknown = null;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = null;
-  }
-
-  if (!response.ok) {
-    const messageFromDetail = isRecord(payload) && typeof payload.detail === "string" ? payload.detail : null;
-    const messageFromError = isRecord(payload) && typeof payload.error === "string" ? payload.error : null;
-    const message = messageFromDetail ?? messageFromError ?? `Request failed with status ${response.status}.`;
-    throw new ApiError(message, response.status);
-  }
-
-  return payload as T;
-};
 
 const mapAlgorithmState = (raw: unknown): { state: LeakyBucketAlgorithmState | null; issues: LeakyBucketIssue[] } => {
   if (!isRecord(raw)) {
@@ -347,20 +270,16 @@ const mapPolicySnapshot = (raw: PolicyRaw): LeakyBucketPolicySnapshot | null => 
 };
 
 const listPolicies = async (): Promise<LeakyBucketPolicySnapshot[]> => {
-  const payload = await requestJson<PolicyRaw[]>("/api/policies");
+  const payload = await listPoliciesRaw();
   return payload.map(mapPolicySnapshot).filter((item): item is LeakyBucketPolicySnapshot => item !== null);
 };
 
 const getActivePolicy = async (): Promise<LeakyBucketPolicySnapshot | null> => {
-  try {
-    const payload = await requestJson<PolicyRaw>("/api/policies/active");
-    return mapPolicySnapshot(payload);
-  } catch (error) {
-    if (error instanceof ApiError && error.status === 404) {
-      return null;
-    }
-    throw error;
+  const payload = await getActivePolicyRaw();
+  if (!payload) {
+    return null;
   }
+  return mapPolicySnapshot(payload);
 };
 
 const createPolicy = async (params: {
@@ -369,15 +288,14 @@ const createPolicy = async (params: {
   leakRatePerSec: number;
   waterPerRequest: number;
 }): Promise<LeakyBucketPolicySnapshot> => {
-  const payload = await requestJson<PolicyRaw>("/api/policies", "POST", {
+  const payload = await createPolicyRaw({
     name: params.name,
     algorithm: "leaky_bucket",
-    params_json: {
+    paramsJson: {
       capacity: params.capacity,
       leak_rate_per_sec: params.leakRatePerSec,
       water_per_request: params.waterPerRequest,
     },
-    enabled: true,
     description: "Managed by leaky-bucket dashboard",
   });
 
@@ -392,14 +310,14 @@ const updatePolicy = async (
   policyId: string,
   params: { capacity: number; leakRatePerSec: number; waterPerRequest: number },
 ): Promise<LeakyBucketPolicySnapshot> => {
-  const payload = await requestJson<PolicyRaw>(`/api/policies/${policyId}`, "PUT", {
+  const payload = await updatePolicyRaw({
+    policyId,
     algorithm: "leaky_bucket",
-    params_json: {
+    paramsJson: {
       capacity: params.capacity,
       leak_rate_per_sec: params.leakRatePerSec,
       water_per_request: params.waterPerRequest,
     },
-    enabled: true,
   });
 
   const mapped = mapPolicySnapshot(payload);
@@ -410,7 +328,7 @@ const updatePolicy = async (
 };
 
 const activatePolicy = async (policyId: string, resetRuntimeState: boolean): Promise<void> => {
-  await requestJson(`/api/policies/${policyId}/activate?reset_runtime_state=${resetRuntimeState ? "true" : "false"}`, "POST");
+  await activatePolicyRaw(policyId, resetRuntimeState);
 };
 
 export const syncLeakyBucketPolicyConfig = async (params: {
@@ -419,41 +337,26 @@ export const syncLeakyBucketPolicyConfig = async (params: {
   waterPerRequest: number;
   resetRuntimeState: boolean;
 }): Promise<LeakyBucketPolicySnapshot> => {
-  const active = await getActivePolicy();
-
-  let targetPolicy: LeakyBucketPolicySnapshot;
-  if (active && active.enabled) {
-    targetPolicy = await updatePolicy(active.id, {
+  return syncDashboardPolicy({
+    dashboardPolicyName: DASHBOARD_POLICY_NAME,
+    config: {
       capacity: params.capacity,
       leakRatePerSec: params.leakRatePerSec,
       waterPerRequest: params.waterPerRequest,
-    });
-  } else {
-    const candidates = await listPolicies();
-    const existingManaged = candidates.find((item) => item.name === DASHBOARD_POLICY_NAME);
-
-    if (existingManaged) {
-      targetPolicy = await updatePolicy(existingManaged.id, {
-        capacity: params.capacity,
-        leakRatePerSec: params.leakRatePerSec,
-        waterPerRequest: params.waterPerRequest,
-      });
-    } else {
-      targetPolicy = await createPolicy({
-        name: DASHBOARD_POLICY_NAME,
-        capacity: params.capacity,
-        leakRatePerSec: params.leakRatePerSec,
-        waterPerRequest: params.waterPerRequest,
-      });
-    }
-  }
-
-  await activatePolicy(targetPolicy.id, params.resetRuntimeState);
-  const latest = await getActivePolicy();
-  if (!latest) {
-    throw new ApiError("Failed to read active policy after activation.", 500);
-  }
-  return latest;
+    },
+    resetRuntimeState: params.resetRuntimeState,
+    getActivePolicy,
+    listPolicies,
+    updatePolicy,
+    createPolicy: (name, config) =>
+      createPolicy({
+        name,
+        capacity: config.capacity,
+        leakRatePerSec: config.leakRatePerSec,
+        waterPerRequest: config.waterPerRequest,
+      }),
+    activatePolicy,
+  });
 };
 
 export const fetchActiveLeakyBucketPolicy = async (): Promise<LeakyBucketPolicySnapshot | null> => getActivePolicy();
@@ -461,61 +364,36 @@ export const fetchActiveLeakyBucketPolicy = async (): Promise<LeakyBucketPolicyS
 export const simulateLeakyBucketRequest = async (
   payload: LeakyBucketSimulationPayload,
 ): Promise<LeakyBucketApiResult> => {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-
-  try {
-    const response = await fetch(`${API_BASE_URL}/api/simulate/request`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        client_id: payload.clientId,
-        run_id: payload.runId,
-      }),
-      signal: controller.signal,
-    });
-
-    let responseBody: unknown = null;
-    try {
-      responseBody = await response.json();
-    } catch {
-      return createSyntheticErrorResult("Backend returned a non-JSON response.");
-    }
-
-    const mapped = mapDecision(responseBody, payload.clientId);
-
-    if (!response.ok && response.status !== 429) {
-      const errorMessage = mapped.issues[0]?.message ?? `Request failed with status ${response.status}.`;
-      return createSyntheticErrorResult(errorMessage);
-    }
-
-    if (!mapped.decision) {
-      const errorMessage = mapped.issues[0]?.message ?? "Unable to parse decision response.";
-      return createSyntheticErrorResult(errorMessage);
-    }
-
-    return {
-      event: {
-        id: mapped.decision.requestId,
-        ts: mapped.decision.ts,
-        kind: "decision",
-        decision: mapped.decision,
-        issues: mapped.issues,
-      },
-    };
-  } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") {
-      return createSyntheticErrorResult("Request timeout while calling simulate endpoint.");
-    }
-    if (error instanceof Error) {
-      return createSyntheticErrorResult(`Request error: ${error.message}`);
-    }
-    return createSyntheticErrorResult("Unknown request error.");
-  } finally {
-    clearTimeout(timeout);
+  const call = await postSimulateRequest({ clientId: payload.clientId, runId: payload.runId });
+  if (call.kind === "non_json") {
+    return createSyntheticErrorResult("Backend returned a non-JSON response.");
   }
+  if (call.kind === "timeout") {
+    return createSyntheticErrorResult("Request timeout while calling simulate endpoint.");
+  }
+  if (call.kind === "network_error") {
+    return createSyntheticErrorResult(`Request error: ${call.message}`);
+  }
+
+  const mapped = mapDecision(call.result.body, payload.clientId);
+  if (!call.result.ok && call.result.status !== 429) {
+    const errorMessage = mapped.issues[0]?.message ?? `Request failed with status ${call.result.status}.`;
+    return createSyntheticErrorResult(errorMessage);
+  }
+  if (!mapped.decision) {
+    const errorMessage = mapped.issues[0]?.message ?? "Unable to parse decision response.";
+    return createSyntheticErrorResult(errorMessage);
+  }
+
+  return {
+    event: {
+      id: mapped.decision.requestId,
+      ts: mapped.decision.ts,
+      kind: "decision",
+      decision: mapped.decision,
+      issues: mapped.issues,
+    },
+  };
 };
 
 export const getFrontendApiBaseUrl = (): string => API_BASE_URL;

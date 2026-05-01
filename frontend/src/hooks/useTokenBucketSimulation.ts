@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  ApiError,
   fetchActiveTokenBucketPolicy,
   simulateTokenBucketRequest,
   syncTokenBucketPolicyConfig,
@@ -16,6 +15,15 @@ import {
   type TokenBucketPolicySnapshot,
   type TokenBucketSimulationConfig,
 } from "../types/tokenBucket";
+import {
+  createRuntimeControl,
+  createSessionId,
+  resetRuntimeAfterStop,
+  resolveSimulationClientId,
+  runSimulationDispatchLoop,
+} from "./simulationRuntime";
+import { deriveBaseKpiStats } from "./kpiBase";
+import { reloadPolicyFromBackend, syncPolicyBeforeStart } from "./policySyncRuntime";
 
 type SimulationSession = {
   id: string;
@@ -41,13 +49,6 @@ type UseTokenBucketSimulationValue = {
   resetView: () => void;
 };
 
-type RuntimeControl = {
-  stopRequested: boolean;
-  pauseRequested: boolean;
-  dispatchSequence: number;
-  inFlight: Set<Promise<void>>;
-};
-
 const INITIAL_KPI: TokenBucketKpiSnapshot = {
   total: 0,
   allowed: 0,
@@ -62,8 +63,6 @@ const INITIAL_KPI: TokenBucketKpiSnapshot = {
   observedRps: 0,
   lastRetryAfterMs: null,
 };
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
 const safeNumber = (value: number, min: number): number => {
   if (!Number.isFinite(value)) {
@@ -84,51 +83,16 @@ const clampConfig = (config: TokenBucketSimulationConfig): TokenBucketSimulation
   rotatingPoolSize: Math.floor(safeNumber(config.rotatingPoolSize, 2)),
 });
 
-const createSessionId = (): string => {
-  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-    return crypto.randomUUID();
-  }
-  return `session-${Date.now()}`;
-};
-
 const deriveKpi = (events: TokenBucketEvent[], fallbackConfig: TokenBucketSimulationConfig): TokenBucketKpiSnapshot => {
-  const decisionEvents = events.filter((event) => event.kind === "decision" && event.decision !== null);
-  const total = decisionEvents.length;
-  const allowed = decisionEvents.filter((event) => event.decision?.allowed).length;
-  const rejected = total - allowed;
-
-  let latestDecision = null;
-  for (let index = decisionEvents.length - 1; index >= 0; index -= 1) {
-    const current = decisionEvents[index].decision;
-    if (current) {
-      latestDecision = current;
-      break;
-    }
-  }
-
-  let lastRetryAfterMs: number | null = null;
-  for (let index = decisionEvents.length - 1; index >= 0; index -= 1) {
-    const current = decisionEvents[index].decision;
-    if (current && !current.allowed && current.retryAfterMs !== null) {
-      lastRetryAfterMs = current.retryAfterMs;
-      break;
-    }
-  }
-
-  const nowMs = Date.now();
-  const observedRps = decisionEvents.filter((event) => {
-    const tsMs = Date.parse(event.ts);
-    return Number.isFinite(tsMs) && nowMs - tsMs <= 1000;
-  }).length;
-
-  const state = latestDecision?.algorithmState ?? null;
+  const { total, allowed, rejected, allowRate, rejectRate, latestDecision, lastRetryAfterMs, observedRps, state } =
+    deriveBaseKpiStats(events);
 
   return {
     total,
     allowed,
     rejected,
-    allowRate: total > 0 ? allowed / total : 0,
-    rejectRate: total > 0 ? rejected / total : 0,
+    allowRate,
+    rejectRate,
     currentTokens: state?.tokens ?? null,
     currentCapacity: state?.capacity ?? fallbackConfig.capacity,
     currentRefillRatePerSec: state?.refillRatePerSec ?? fallbackConfig.refillRatePerSec,
@@ -152,12 +116,7 @@ export const useTokenBucketSimulation = (): UseTokenBucketSimulationValue => {
 
   const mountedRef = useRef(true);
   const statusRef = useRef<SimulationStatus>("idle");
-  const runtimeRef = useRef<RuntimeControl>({
-    stopRequested: false,
-    pauseRequested: false,
-    dispatchSequence: 0,
-    inFlight: new Set(),
-  });
+  const runtimeRef = useRef(createRuntimeControl());
 
   useEffect(() => {
     mountedRef.current = true;
@@ -198,39 +157,24 @@ export const useTokenBucketSimulation = (): UseTokenBucketSimulationValue => {
   );
 
   const reloadActivePolicy = useCallback(async () => {
-    setPolicySyncStatus("loading");
-    try {
-      const backendPolicy = await fetchActiveTokenBucketPolicy();
-      if (!mountedRef.current) {
-        return;
-      }
-
-      if (backendPolicy) {
-        setActivePolicy(backendPolicy);
-        setConfig((previous) =>
-          clampConfig({
-            ...previous,
-            capacity: backendPolicy.capacity,
-            refillRatePerSec: backendPolicy.refillRatePerSec,
-            tokensPerRequest: backendPolicy.tokensPerRequest,
-          }),
-        );
-        setPolicySyncStatus("ready");
-        setPolicySyncMessage(
-          `Loaded active policy ${backendPolicy.name} (capacity=${backendPolicy.capacity}, refill=${backendPolicy.refillRatePerSec}/s, tokens_per_request=${backendPolicy.tokensPerRequest}).`,
-        );
-      } else {
-        setActivePolicy(null);
-        setPolicySyncStatus("ready");
-        setPolicySyncMessage("No active token bucket policy found. Start will create or reuse one.");
-      }
-    } catch (error) {
-      if (!mountedRef.current) {
-        return;
-      }
-      setPolicySyncStatus("error");
-      setPolicySyncMessage(error instanceof Error ? error.message : "Failed to load active policy.");
-    }
+    await reloadPolicyFromBackend({
+      mountedRef,
+      setPolicySyncStatus,
+      setPolicySyncMessage,
+      setActivePolicy,
+      setConfig,
+      fetchActivePolicy: fetchActiveTokenBucketPolicy,
+      applyLoadedPolicyToConfig: (previous, backendPolicy) =>
+        clampConfig({
+          ...previous,
+          capacity: backendPolicy.capacity,
+          refillRatePerSec: backendPolicy.refillRatePerSec,
+          tokensPerRequest: backendPolicy.tokensPerRequest,
+        }),
+      loadedMessage: (backendPolicy) =>
+        `Loaded active policy ${backendPolicy.name} (capacity=${backendPolicy.capacity}, refill=${backendPolicy.refillRatePerSec}/s, tokens_per_request=${backendPolicy.tokensPerRequest}).`,
+      emptyMessage: "No active token bucket policy found. Start will create or reuse one.",
+    });
   }, []);
 
   useEffect(() => {
@@ -238,14 +182,7 @@ export const useTokenBucketSimulation = (): UseTokenBucketSimulationValue => {
   }, [reloadActivePolicy]);
 
   const resolveClientId = useCallback((resolvedConfig: TokenBucketSimulationConfig): string => {
-    const runtime = runtimeRef.current;
-    if (resolvedConfig.clientIdMode === "single") {
-      return resolvedConfig.singleClientId;
-    }
-
-    const poolIndex = runtime.dispatchSequence % resolvedConfig.rotatingPoolSize;
-    runtime.dispatchSequence += 1;
-    return `client-${poolIndex + 1}`;
+    return resolveSimulationClientId(runtimeRef.current, resolvedConfig);
   }, []);
 
   const dispatchRequest = useCallback(
@@ -272,44 +209,33 @@ export const useTokenBucketSimulation = (): UseTokenBucketSimulationValue => {
     setConfig(resolvedConfig);
 
     void (async () => {
-      setPolicySyncStatus("syncing");
-      setPolicySyncMessage("Syncing frontend token-bucket config to backend policy...");
-
-      try {
-        const syncedPolicy = await syncTokenBucketPolicyConfig({
-          capacity: resolvedConfig.capacity,
-          refillRatePerSec: resolvedConfig.refillRatePerSec,
-          tokensPerRequest: resolvedConfig.tokensPerRequest,
-          resetRuntimeState: true,
-        });
-        if (!mountedRef.current) {
-          return;
-        }
-        setActivePolicy(syncedPolicy);
-        const nextConfig = clampConfig({
-          ...resolvedConfig,
-          capacity: syncedPolicy.capacity,
-          refillRatePerSec: syncedPolicy.refillRatePerSec,
-          tokensPerRequest: syncedPolicy.tokensPerRequest,
-        });
-        setConfig(nextConfig);
-        setPolicySyncStatus("ready");
-        setPolicySyncMessage(
+      const effectiveConfig = await syncPolicyBeforeStart({
+        mountedRef,
+        resolvedConfig,
+        setPolicySyncStatus,
+        setPolicySyncMessage,
+        setActivePolicy,
+        setConfig,
+        syncingMessage: "Syncing frontend token-bucket config to backend policy...",
+        syncPolicy: (currentConfig) =>
+          syncTokenBucketPolicyConfig({
+            capacity: currentConfig.capacity,
+            refillRatePerSec: currentConfig.refillRatePerSec,
+            tokensPerRequest: currentConfig.tokensPerRequest,
+            resetRuntimeState: true,
+          }),
+        applySyncedPolicyToConfig: (currentConfig, syncedPolicy) =>
+          clampConfig({
+            ...currentConfig,
+            capacity: syncedPolicy.capacity,
+            refillRatePerSec: syncedPolicy.refillRatePerSec,
+            tokensPerRequest: syncedPolicy.tokensPerRequest,
+          }),
+        syncedMessage: (syncedPolicy) =>
           `Synced and activated policy ${syncedPolicy.name} (capacity=${syncedPolicy.capacity}, refill=${syncedPolicy.refillRatePerSec}/s, tokens_per_request=${syncedPolicy.tokensPerRequest}).`,
-        );
-      } catch (error) {
-        if (!mountedRef.current) {
-          return;
-        }
-        const message =
-          error instanceof ApiError
-            ? `${error.message} (HTTP ${error.status})`
-            : error instanceof Error
-              ? error.message
-              : "Failed to sync policy.";
-        setPolicySyncStatus("error");
-        setPolicySyncMessage(message);
-        appendSyntheticError(`Policy sync failed: ${message}`);
+        appendSyntheticError,
+      });
+      if (!effectiveConfig) {
         return;
       }
 
@@ -320,60 +246,20 @@ export const useTokenBucketSimulation = (): UseTokenBucketSimulationValue => {
       };
       setSession(nextSession);
 
-      runtimeRef.current.stopRequested = false;
-      runtimeRef.current.pauseRequested = false;
-      runtimeRef.current.dispatchSequence = 0;
-      runtimeRef.current.inFlight.clear();
+      const runtime = runtimeRef.current;
+      runtime.stopRequested = false;
+      runtime.pauseRequested = false;
+      runtime.dispatchSequence = 0;
+      runtime.inFlight.clear();
 
       statusRef.current = "running";
       setStatus("running");
 
-      const simulationDeadline = Date.now() + resolvedConfig.durationSec * 1000;
-
-      let tokenBudget = 0;
-      let lastTickMs = Date.now();
-
-      while (!runtimeRef.current.stopRequested) {
-        const nowMs = Date.now();
-
-        if (nowMs >= simulationDeadline) {
-          break;
-        }
-
-        if (runtimeRef.current.pauseRequested) {
-          await sleep(60);
-          continue;
-        }
-
-        const elapsedMs = nowMs - lastTickMs;
-        lastTickMs = nowMs;
-        tokenBudget += (elapsedMs / 1000) * resolvedConfig.rps;
-        tokenBudget = Math.min(tokenBudget, resolvedConfig.rps * 2);
-
-        let dispatched = false;
-        while (
-          tokenBudget >= 1 &&
-          runtimeRef.current.inFlight.size < resolvedConfig.concurrency &&
-          !runtimeRef.current.stopRequested &&
-          !runtimeRef.current.pauseRequested
-        ) {
-          tokenBudget -= 1;
-          dispatched = true;
-
-          const task = dispatchRequest(resolvedConfig).finally(() => {
-            runtimeRef.current.inFlight.delete(task);
-          });
-          runtimeRef.current.inFlight.add(task);
-        }
-
-        if (!dispatched) {
-          await sleep(12);
-        }
-      }
-
-      if (runtimeRef.current.inFlight.size > 0) {
-        await Promise.allSettled(Array.from(runtimeRef.current.inFlight));
-      }
+      await runSimulationDispatchLoop({
+        runtime,
+        config: resolvedConfig,
+        dispatch: () => dispatchRequest(resolvedConfig),
+      });
 
       if (!mountedRef.current) {
         return;
@@ -389,8 +275,7 @@ export const useTokenBucketSimulation = (): UseTokenBucketSimulationValue => {
             }
           : previous,
       );
-      runtimeRef.current.stopRequested = false;
-      runtimeRef.current.pauseRequested = false;
+      resetRuntimeAfterStop(runtimeRef.current);
     })();
   }, [appendSyntheticError, config, dispatchRequest, policySyncStatus]);
 
